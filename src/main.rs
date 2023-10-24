@@ -1,17 +1,23 @@
-mod libs;
+mod backends;
+mod cli;
+mod config;
+mod decorations;
+mod handlers;
+mod lua;
+mod state;
+mod workspaces;
+mod layouts;
+mod tiling;
 
-use crate::libs::{
+use crate::{
 	backends::init_with_backend,
 	config::{
 		parse_config,
 		Config,
 	},
-	structs::{
-		args::Args,
-		comms::{
-			CommsChannel,
-			ConfigCommands,
-		},
+	lua::{
+		CommsChannel,
+		ConfigCommands,
 	},
 };
 use chrono::Local;
@@ -70,7 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 		tracing_subscriber::fmt().with_writer(log_appender).init();
 	}
 
-	let args = Args::parse();
+	let args = cli::Args::parse();
 
 	init_with_backend(&args.backend);
 
