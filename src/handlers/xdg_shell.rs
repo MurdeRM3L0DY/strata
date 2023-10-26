@@ -6,6 +6,7 @@ use crate::{
 	},
 };
 use log::warn;
+use parking_lot::RwLock;
 use smithay::{
 	delegate_xdg_decoration,
 	delegate_xdg_shell,
@@ -44,10 +45,9 @@ use smithay::{
 		},
 	},
 };
-use std::{
-	cell::RefCell,
-	rc::Rc,
-	sync::Mutex,
+use std::sync::{
+	Arc,
+	Mutex,
 };
 
 impl XdgShellHandler for StrataState {
@@ -57,7 +57,7 @@ impl XdgShellHandler for StrataState {
 
 	fn new_toplevel(&mut self, surface: ToplevelSurface) {
 		let window = Window::new(surface);
-		self.workspaces.current_mut().add_window(Rc::new(RefCell::new(StrataWindow {
+		self.workspaces.current_mut().add_window(Arc::new(RwLock::new(StrataWindow {
 			smithay_window: window.clone(),
 			rec: window.geometry(),
 		})));

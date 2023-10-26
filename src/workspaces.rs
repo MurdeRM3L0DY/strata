@@ -6,6 +6,11 @@ use crate::{
 	tiling::refresh_geometry,
 	CONFIG,
 };
+use parking_lot::{
+	MappedRwLockReadGuard,
+	RwLock,
+	RwLockReadGuard,
+};
 use smithay::{
 	backend::renderer::{
 		element::{
@@ -32,13 +37,7 @@ use smithay::{
 		Transform,
 	},
 };
-use std::{
-	cell::{
-		Ref,
-		RefCell,
-	},
-	rc::Rc,
-};
+use std::sync::Arc;
 
 pub struct StrataWindow {
 	pub smithay_window: Window,
@@ -46,7 +45,7 @@ pub struct StrataWindow {
 }
 
 pub struct Workspace {
-	pub windows: Vec<Rc<RefCell<StrataWindow>>>,
+	pub windows: Vec<Arc<RwLock<StrataWindow>>>,
 	pub outputs: Vec<Output>,
 	pub layout_tree: Dwindle,
 }
@@ -59,7 +58,7 @@ pub struct Workspaces {
 #[derive(Clone)]
 pub enum Dwindle {
 	Empty,
-	Window(Rc<RefCell<StrataWindow>>),
+	Window(Arc<RwLock<StrataWindow>>),
 	Split { split: HorizontalOrVertical, ratio: f32, left: Box<Dwindle>, right: Box<Dwindle> },
 }
 
@@ -92,25 +91,25 @@ impl Workspace {
 		Workspace { windows: Vec::new(), outputs: Vec::new(), layout_tree: Dwindle::new() }
 	}
 
-	pub fn windows(&self) -> impl Iterator<Item = Ref<'_, Window>> {
-		self.windows.iter().map(|w| Ref::map(w.borrow(), |hw| &hw.smithay_window))
+	pub fn windows(&self) -> impl Iterator<Item = MappedRwLockReadGuard<'_, Window>> {
+		self.windows.iter().map(|w| RwLockReadGuard::map(w.read(), |hw| &hw.smithay_window))
 	}
 
-	pub fn strata_windows(&self) -> impl Iterator<Item = Ref<'_, StrataWindow>> {
-		self.windows.iter().map(|w| Ref::map(w.borrow(), |hw| hw))
+	pub fn strata_windows(&self) -> impl Iterator<Item = MappedRwLockReadGuard<'_, StrataWindow>> {
+		self.windows.iter().map(|w| RwLockReadGuard::map(w.read(), |hw| hw))
 	}
 
-	pub fn add_window(&mut self, window: Rc<RefCell<StrataWindow>>) {
-		self.windows.retain(|w| w.borrow().smithay_window != window.borrow().smithay_window);
+	pub fn add_window(&mut self, window: Arc<RwLock<StrataWindow>>) {
+		self.windows.retain(|w| w.read().smithay_window != window.read().smithay_window);
 		self.windows.push(window.clone());
 		self.layout_tree.insert(window, self.layout_tree.next_split(), 0.5);
 		refresh_geometry(self);
 	}
 
-	pub fn remove_window(&mut self, window: &Window) -> Option<Rc<RefCell<StrataWindow>>> {
+	pub fn remove_window(&mut self, window: &Window) -> Option<Arc<RwLock<StrataWindow>>> {
 		let mut removed = None;
 		self.windows.retain(|w| {
-			if &w.borrow().smithay_window == window {
+			if &w.read().smithay_window == window {
 				removed = Some(w.clone());
 				false
 			} else {
@@ -134,17 +133,17 @@ impl Workspace {
 	{
 		let mut render_elements: Vec<C> = Vec::new();
 		for element in &self.windows {
-			let window = &element.borrow().smithay_window;
+			let window = &element.read().smithay_window;
 			if CONFIG.read().decorations.border.width > 0 {
 				render_elements.push(C::from(BorderShader::element(
 					renderer.glow_renderer_mut(),
 					window,
-					element.borrow().rec.loc,
+					element.read().rec.loc,
 				)));
 			}
 			render_elements.append(&mut window.render_elements(
 				renderer,
-				element.borrow().render_location().to_physical(1),
+				element.read().render_location().to_physical(1),
 				Scale::from(1.0),
 				1.0,
 			));
@@ -185,13 +184,13 @@ impl Workspace {
 	pub fn window_under<P: Into<Point<f64, Logical>>>(
 		&self,
 		point: P,
-	) -> Option<(Ref<'_, Window>, Point<i32, Logical>)> {
+	) -> Option<(MappedRwLockReadGuard<'_, Window>, Point<i32, Logical>)> {
 		let point = point.into();
-		self.windows.iter().filter(|e| e.borrow().bbox().to_f64().contains(point)).find_map(|e| {
+		self.windows.iter().filter(|e| e.read().bbox().to_f64().contains(point)).find_map(|e| {
 			// we need to offset the point to the location where the surface is actually drawn
-			let render_location = e.borrow().render_location();
-			if e.borrow().smithay_window.is_in_input_region(&(point - render_location.to_f64())) {
-				Some((Ref::map(e.borrow(), |hw| &hw.smithay_window), render_location))
+			let render_location = e.read().render_location();
+			if e.read().smithay_window.is_in_input_region(&(point - render_location.to_f64())) {
+				Some((RwLockReadGuard::map(e.read(), |hw| &hw.smithay_window), render_location))
 			} else {
 				None
 			}
@@ -199,7 +198,7 @@ impl Workspace {
 	}
 
 	pub fn contains_window(&self, window: &Window) -> bool {
-		self.windows.iter().any(|w| &w.borrow().smithay_window == window)
+		self.windows.iter().any(|w| &w.read().smithay_window == window)
 	}
 }
 
@@ -233,7 +232,7 @@ impl Workspaces {
 		&self.workspaces[self.current as usize]
 	}
 
-	pub fn all_windows(&self) -> impl Iterator<Item = Ref<'_, Window>> {
+	pub fn all_windows(&self) -> impl Iterator<Item = MappedRwLockReadGuard<'_, Window>> {
 		self.workspaces.iter().flat_map(|w| w.windows())
 	}
 

@@ -1,8 +1,6 @@
+use parking_lot::RwLock;
 use smithay::desktop::Window;
-use std::{
-	cell::RefCell,
-	rc::Rc,
-};
+use std::sync::Arc;
 
 use crate::workspaces::{
 	Dwindle,
@@ -17,7 +15,7 @@ impl Dwindle {
 
 	pub fn insert(
 		&mut self,
-		window: Rc<RefCell<StrataWindow>>,
+		window: Arc<RwLock<StrataWindow>>,
 		splitnew: HorizontalOrVertical,
 		rationew: f32,
 	) {
@@ -43,19 +41,19 @@ impl Dwindle {
 		match self {
 			Dwindle::Empty => {}
 			Dwindle::Window(w) => {
-				if w.borrow().smithay_window == *window {
+				if w.read().smithay_window == *window {
 					*self = Dwindle::Empty;
 				}
 			}
 			Dwindle::Split { left, right, split: _, ratio: _ } => {
 				if let Dwindle::Window(w) = left.as_ref() {
-					if w.borrow().smithay_window == *window {
+					if w.read().smithay_window == *window {
 						*self = *right.clone();
 						return;
 					}
 				}
 				if let Dwindle::Window(w) = right.as_ref() {
-					if w.borrow().smithay_window == *window {
+					if w.read().smithay_window == *window {
 						*self = *left.clone();
 						return;
 					}

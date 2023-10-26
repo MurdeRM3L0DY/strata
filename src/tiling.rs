@@ -1,7 +1,4 @@
-use std::{
-	cell::RefCell,
-	rc::Rc,
-};
+use std::sync::Arc;
 
 use crate::{
 	workspaces::{
@@ -12,6 +9,7 @@ use crate::{
 	},
 	CONFIG,
 };
+use parking_lot::RwLock;
 use smithay::{
 	desktop::layer_map_for_output,
 	utils::{
@@ -34,7 +32,7 @@ pub fn refresh_geometry(workspace: &mut Workspace) {
 	match &mut workspace.layout_tree {
 		Dwindle::Empty => {}
 		Dwindle::Window(w) => {
-			w.borrow_mut().rec = Rectangle {
+			w.write().rec = Rectangle {
 				loc: Point::from((gaps.0 + gaps.1 + output.loc.x, gaps.0 + gaps.1 + output.loc.y)),
 				size: Size::from((
 					output.size.w - ((gaps.0 + gaps.1) * 2),
@@ -73,7 +71,7 @@ pub fn refresh_geometry(workspace: &mut Workspace) {
 
 pub fn generate_layout(
 	tree: &mut Dwindle,
-	lastwin: &Rc<RefCell<StrataWindow>>,
+	lastwin: &Arc<RwLock<StrataWindow>>,
 	lastgeo: Rectangle<i32, Logical>,
 	split: HorizontalOrVertical,
 	ratio: f32,
@@ -99,7 +97,7 @@ pub fn generate_layout(
 		loc: Point::from((loc.x + gaps.1, loc.y + gaps.1)),
 	};
 
-	lastwin.borrow_mut().rec = rec_with_gaps;
+	lastwin.write().rec = rec_with_gaps;
 
 	let loc = match split {
 		HorizontalOrVertical::Horizontal => Point::from((output.w - size.w, lastgeo.loc.y)),
@@ -113,10 +111,10 @@ pub fn generate_layout(
 	};
 	match tree {
 		Dwindle::Empty => {}
-		Dwindle::Window(w) => w.borrow_mut().rec = rec_with_gaps,
+		Dwindle::Window(w) => w.write().rec = rec_with_gaps,
 		Dwindle::Split { split, ratio, left, right } => {
 			if let Dwindle::Window(w) = left.as_mut() {
-				w.borrow_mut().rec = rec;
+				w.write().rec = rec;
 				generate_layout(right.as_mut(), w, rec, *split, *ratio, output, gaps)
 			}
 		}
