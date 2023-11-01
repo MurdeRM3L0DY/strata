@@ -5,9 +5,9 @@ use crate::{
 	},
 	state::{
 		CalloopData,
+		ClientState,
 		StrataState,
 	},
-	CONFIG,
 };
 use smithay::{
 	backend::{
@@ -36,11 +36,18 @@ use smithay::{
 	},
 	reexports::{
 		calloop::{
+			self,
+			generic::{
+				FdWrapper,
+				Generic,
+			},
 			timer::{
 				TimeoutAction,
 				Timer,
 			},
 			EventLoop,
+			Interest,
+			PostAction,
 		},
 		wayland_server::Display,
 	},
@@ -49,15 +56,59 @@ use smithay::{
 		Scale,
 		Transform,
 	},
-	wayland::shell::wlr_layer::Layer,
+	wayland::{
+		shell::wlr_layer::Layer,
+		socket::ListeningSocketSource,
+	},
 };
 use std::{
+	ffi::OsString,
+	os::fd::AsRawFd,
 	process::Command,
+	sync::Arc,
 	time::Duration,
 };
 
+fn init_wayland_display(
+	event_loop: &mut EventLoop<CalloopData>,
+) -> anyhow::Result<(Display<StrataState>, OsString)> {
+	let mut display: Display<StrataState> = Display::new().unwrap();
+
+	let listening_socket = ListeningSocketSource::new_auto().unwrap();
+	let socket = listening_socket.socket_name().to_os_string();
+
+	let handle = event_loop.handle();
+
+	event_loop
+		.handle()
+		.insert_source(listening_socket, |client_stream, _, data| {
+			// You may also associate some data with the client when inserting the client.
+
+			data.state.dh.insert_client(client_stream, Arc::new(ClientState::default())).unwrap();
+		})
+		.expect("Failed to init the wayland event source.");
+
+	handle
+		.insert_source(
+			Generic::new(
+				unsafe { FdWrapper::new(display.backend().poll_fd().as_raw_fd()) },
+				Interest::READ,
+				calloop::Mode::Level,
+			),
+			|_, _, data| {
+				data.display.dispatch_clients(&mut data.state).unwrap();
+				Ok(PostAction::Continue)
+			},
+		)
+		.unwrap();
+
+	Ok((display, socket))
+}
+
 pub fn init_winit() {
 	let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new().unwrap();
+	let (display, socket) =
+		init_wayland_display(&mut event_loop).expect("unable to init wayland display");
 	let display: Display<StrataState> = Display::new().unwrap();
 	let display_handle = display.handle();
 	let (backend, mut winit) = winit::init().unwrap();
@@ -75,17 +126,18 @@ pub fn init_winit() {
 	output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
 	output.set_preferred(mode);
 	let damage_tracked_renderer = OutputDamageTracker::from_output(&output);
+
 	let state = StrataState::new(
 		&mut event_loop,
-		display,
-		"winit".to_string(),
+		display.handle(),
+		socket,
 		backend,
 		damage_tracked_renderer,
 	);
-	let mut data = CalloopData { display_handle, state };
+	let mut data = CalloopData { display, state };
 	let state = &mut data.state;
 	BorderShader::init(state.backend.renderer());
-	for workspace in state.workspaces.iter() {
+	for workspace in state.shared.borrow().workspaces.iter() {
 		workspace.add_output(output.clone());
 	}
 
@@ -102,7 +154,7 @@ pub fn init_winit() {
 		.unwrap();
 
 	// Autostart applications
-	for cmd in &CONFIG.read().autostart {
+	for cmd in &state.shared.borrow().config.autostart {
 		Command::new("/bin/sh").arg("-c").args(cmd).spawn().ok();
 	}
 
@@ -115,7 +167,6 @@ pub fn winit_dispatch(
 	output: &Output,
 	full_redraw: &mut u8,
 ) {
-	let display = &mut data.display_handle;
 	let state = &mut data.state;
 
 	let res = winit.dispatch_new_events(|event| {
@@ -129,7 +180,7 @@ pub fn winit_dispatch(
 	});
 
 	if let Err(WinitError::WindowClosed) = res {
-		state.loop_signal.stop();
+		state.shared.borrow().loop_signal.stop();
 	} else {
 		res.unwrap();
 	}
@@ -142,7 +193,7 @@ pub fn winit_dispatch(
 	state.backend.bind().unwrap();
 
 	let mut renderelements: Vec<CustomRenderElements<_>> = vec![];
-	let workspace = state.workspaces.current_mut();
+	let workspace = state.shared.borrow().workspaces.current_mut();
 	let output = workspace.outputs().next().unwrap();
 	let layer_map = layer_map_for_output(output);
 	let (lower, upper): (Vec<&LayerSurface>, Vec<&LayerSurface>) = layer_map
@@ -196,7 +247,7 @@ pub fn winit_dispatch(
 	});
 
 	workspace.windows().for_each(|e| e.refresh());
-	display.flush_clients().unwrap();
+	state.dh.flush_clients().unwrap();
 	state.popup_manager.cleanup();
 	BorderShader::cleanup(state.backend.renderer());
 }

@@ -1,9 +1,10 @@
 use crate::{
+	config::Config,
+	lua,
 	workspaces::{
 		FocusTarget,
 		Workspaces,
 	},
-	CONFIG,
 };
 use smithay::{
 	backend::{
@@ -25,12 +26,8 @@ use smithay::{
 	},
 	reexports::{
 		calloop::{
-			generic::Generic,
 			EventLoop,
-			Interest,
 			LoopSignal,
-			Mode,
-			PostAction,
 		},
 		wayland_server::{
 			backend::{
@@ -67,138 +64,77 @@ use smithay::{
 			},
 		},
 		shm::ShmState,
-		socket::ListeningSocketSource,
 	},
 };
 use std::{
+	cell::{
+		Ref,
+		RefCell,
+	},
 	ffi::OsString,
 	process::Command,
-	sync::Arc,
+	rc::Rc,
 	time::Instant,
 };
 
 pub struct CalloopData {
 	pub state: StrataState,
-	pub display_handle: DisplayHandle,
+	pub display: Display<StrataState>,
 }
 
-pub struct StrataState {
+pub struct SharedStrataState {
 	pub dh: DisplayHandle,
-	pub backend: WinitGraphicsBackend<GlowRenderer>,
-	pub damage_tracker: OutputDamageTracker,
-	pub start_time: Instant,
-	pub loop_signal: LoopSignal,
-	pub compositor_state: CompositorState,
-	pub xdg_shell_state: XdgShellState,
-	pub xdg_decoration_state: XdgDecorationState,
-	pub shm_state: ShmState,
-	pub output_manager_state: OutputManagerState,
+	pub workspaces: Workspaces,
+	pub lua: mlua::Lua,
+	pub config: Config,
+
+	pub seat: Seat<Self>,
+	pub seat_state: SeatState<Self>,
 	pub data_device_state: DataDeviceState,
 	pub primary_selection_state: PrimarySelectionState,
-	pub seat_state: SeatState<StrataState>,
-	pub layer_shell_state: WlrLayerShellState,
-	pub popup_manager: PopupManager,
-	pub seat: Seat<Self>,
-	pub seat_name: String,
-	pub socket_name: OsString,
-	pub workspaces: Workspaces,
 	pub pointer_location: Point<f64, Logical>,
+
+	pub loop_signal: LoopSignal,
 }
 
-impl StrataState {
-	pub fn new(
-		event_loop: &mut EventLoop<CalloopData>,
-		display: Display<StrataState>,
-		seat_name: String,
-		backend: WinitGraphicsBackend<GlowRenderer>,
-		damage_tracker: OutputDamageTracker,
-	) -> Self {
-		let config = &CONFIG.read();
+thread_local! {
+	pub static SHARED: RefCell<Rc<RefCell<SharedStrataState>>> = panic!("SharedStrataState not set");
+}
 
-		let start_time = Instant::now();
-		let dh = display.handle();
-		let compositor_state = CompositorState::new::<Self>(&dh);
-		let xdg_shell_state = XdgShellState::new::<Self>(&dh);
-		let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
-		let shm_state = ShmState::new::<Self>(&dh, vec![]);
-		let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
-		let mut seat_state = SeatState::new();
-		let data_device_state = DataDeviceState::new::<Self>(&dh);
-		let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
-		let mut seat = seat_state.new_wl_seat(&dh, seat_name.clone());
-		let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
-		if !config.general.kb_repeat.is_empty() {
-			let key_delay: i32 = config.general.kb_repeat[0];
-			let key_repeat: i32 = config.general.kb_repeat[1];
-			seat.add_keyboard(XkbConfig::default(), key_delay, key_repeat)
-				.expect("Couldn't parse XKB config");
-		} else {
-			seat.add_keyboard(XkbConfig::default(), 500, 250).expect("Couldn't parse XKB config");
-		}
-		let config_workspace: u8 = config.general.workspaces.clone();
-		let workspaces = Workspaces::new(config_workspace);
-		seat.add_pointer();
-		let socket_name = Self::init_wayland_listener(display, event_loop);
-		let loop_signal = event_loop.get_signal();
+impl SharedStrataState {
+	pub fn setup(shared: Rc<RefCell<SharedStrataState>>, event_loop: &mut EventLoop<CalloopData>) {
+		SHARED.set(shared);
 
-		Self {
-			dh,
-			backend,
-			damage_tracker,
-			start_time,
-			seat_name,
-			socket_name,
-			compositor_state,
-			xdg_shell_state,
-			xdg_decoration_state,
-			loop_signal,
-			shm_state,
-			output_manager_state,
-			popup_manager: PopupManager::default(),
-			seat_state,
-			data_device_state,
-			primary_selection_state,
-			layer_shell_state,
-			seat,
-			workspaces,
-			pointer_location: Point::from((0.0, 0.0)),
-		}
+		SHARED.with_borrow(|d| {
+			// initialize lua runtime and parse user config
+			lua::init(Ref::map(d.borrow(), |d| &d.lua));
+
+			let config = d.borrow().config;
+
+			{
+				(*d.borrow_mut()).workspaces = Workspaces::new(config.general.workspaces);
+			}
+
+			let mut seat = d.borrow().seat;
+			if !config.general.kb_repeat.is_empty() {
+				let key_delay: i32 = config.general.kb_repeat[0];
+				let key_repeat: i32 = config.general.kb_repeat[1];
+				seat.add_keyboard(XkbConfig::default(), key_delay, key_repeat)
+					.expect("Couldn't parse XKB config");
+			} else {
+				seat.add_keyboard(XkbConfig::default(), 500, 250)
+					.expect("Couldn't parse XKB config");
+			}
+			seat.add_pointer();
+		});
 	}
 
-	fn init_wayland_listener(
-		display: Display<StrataState>,
-		event_loop: &mut EventLoop<CalloopData>,
-	) -> OsString {
-		let listening_socket = ListeningSocketSource::new_auto().unwrap();
-		let socket_name = listening_socket.socket_name().to_os_string();
-
-		let handle = event_loop.handle();
-
-		event_loop
-			.handle()
-			.insert_source(listening_socket, move |client_stream, _, state| {
-				// You may also associate some data with the client when inserting the client.
-				state
-					.display_handle
-					.insert_client(client_stream, Arc::new(ClientState::default()))
-					.unwrap();
-			})
-			.expect("Failed to init the wayland event source.");
-
-		handle
-			.insert_source(
-				Generic::new(display, Interest::READ, Mode::Level),
-				|_, display, state| {
-					unsafe {
-						display.get_mut().dispatch_clients(&mut state.state).unwrap();
-					}
-					Ok(PostAction::Continue)
-				},
-			)
-			.unwrap();
-
-		socket_name
-	}
+	// pub fn with<F>(cb: F)
+	// where
+	// 	F: FnOnce(Ref<'static, SharedStrataState>),
+	// {
+	// 	SHARED.with_borrow(|d| cb(d.borrow()));
+	// }
 
 	pub fn window_under(&mut self) -> Option<(Window, Point<i32, Logical>)> {
 		let pos = self.pointer_location;
@@ -258,6 +194,74 @@ impl StrataState {
 
 	pub fn quit(&mut self) {
 		self.loop_signal.stop();
+	}
+}
+
+pub struct StrataState {
+	pub dh: DisplayHandle,
+	pub backend: WinitGraphicsBackend<GlowRenderer>,
+	pub damage_tracker: OutputDamageTracker,
+	pub start_time: Instant,
+	pub compositor_state: CompositorState,
+	pub xdg_shell_state: XdgShellState,
+	pub xdg_decoration_state: XdgDecorationState,
+	pub shm_state: ShmState,
+	pub output_manager_state: OutputManagerState,
+	pub layer_shell_state: WlrLayerShellState,
+	pub popup_manager: PopupManager,
+	pub socket_name: OsString,
+	pub shared: Rc<RefCell<SharedStrataState>>,
+}
+
+impl StrataState {
+	pub fn new(
+		event_loop: &mut EventLoop<CalloopData>,
+		dh: DisplayHandle,
+		socket_name: OsString,
+		backend: WinitGraphicsBackend<GlowRenderer>,
+		damage_tracker: OutputDamageTracker,
+	) -> Self {
+		let start_time = Instant::now();
+		let compositor_state = CompositorState::new::<Self>(&dh);
+		let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+		let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+		let shm_state = ShmState::new::<Self>(&dh, vec![]);
+		let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
+		let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+
+		let mut seat_state = SeatState::new();
+		let seat = seat_state.new_wl_seat(&dh, "SEAT-0".to_string());
+		let data_device_state = DataDeviceState::new::<SharedStrataState>(&dh);
+		let primary_selection_state = PrimarySelectionState::new::<SharedStrataState>(&dh);
+		let shared = Rc::new(RefCell::new(SharedStrataState {
+			dh,
+			workspaces: Workspaces::new(10),
+			lua: mlua::Lua::new(),
+			config: Config::default(),
+			seat_state,
+			seat,
+			data_device_state,
+			primary_selection_state,
+			pointer_location: Point::from((0.0, 0.0)),
+			loop_signal: event_loop.get_signal(),
+		}));
+
+		SharedStrataState::setup(Rc::clone(&shared), event_loop);
+
+		Self {
+			backend,
+			damage_tracker,
+			start_time,
+			socket_name,
+			compositor_state,
+			xdg_shell_state,
+			xdg_decoration_state,
+			shm_state,
+			output_manager_state,
+			popup_manager: PopupManager::default(),
+			layer_shell_state,
+			shared,
+		}
 	}
 
 	pub fn spawn(&mut self, command: &str) {

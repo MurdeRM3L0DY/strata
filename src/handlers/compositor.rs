@@ -2,7 +2,7 @@ use crate::{
 	handlers::xdg_shell::handle_commit,
 	state::{
 		ClientState,
-		StrataState,
+		StrataState, SharedStrataState,
 	},
 	tiling::refresh_geometry,
 	workspaces::FocusTarget,
@@ -86,13 +86,13 @@ impl CompositorHandler for StrataState {
 				root = parent;
 			}
 			if let Some(window) =
-				self.workspaces.all_windows().find(|w| w.toplevel().wl_surface() == &root)
+				self.shared.borrow().workspaces.all_windows().find(|w| w.toplevel().wl_surface() == &root)
 			{
 				window.on_commit();
 			}
 		};
 		self.popup_manager.commit(surface);
-		handle_commit(&self.workspaces, surface, &self.popup_manager);
+		handle_commit(&self.shared.borrow().workspaces, surface, &self.popup_manager);
 	}
 }
 
@@ -114,11 +114,11 @@ impl ShmHandler for StrataState {
 
 delegate_shm!(StrataState);
 
-impl SeatHandler for StrataState {
+impl SeatHandler for SharedStrataState {
 	type KeyboardFocus = FocusTarget;
 	type PointerFocus = FocusTarget;
 
-	fn seat_state(&mut self) -> &mut SeatState<StrataState> {
+	fn seat_state(&mut self) -> &mut SeatState<Self> {
 		&mut self.seat_state
 	}
 
@@ -160,24 +160,24 @@ impl SeatHandler for StrataState {
 	}
 }
 
-delegate_seat!(StrataState);
+delegate_seat!(SharedStrataState);
 
-impl SelectionHandler for StrataState {
+impl SelectionHandler for SharedStrataState {
 	type SelectionUserData = ();
 }
 
-impl DataDeviceHandler for StrataState {
+impl DataDeviceHandler for SharedStrataState {
 	fn data_device_state(&self) -> &smithay::wayland::selection::data_device::DataDeviceState {
 		&self.data_device_state
 	}
 }
 
-impl ClientDndGrabHandler for StrataState {}
-impl ServerDndGrabHandler for StrataState {}
+impl ClientDndGrabHandler for SharedStrataState {}
+impl ServerDndGrabHandler for SharedStrataState {}
 
 delegate_data_device!(StrataState);
 
-impl PrimarySelectionHandler for StrataState {
+impl PrimarySelectionHandler for SharedStrataState {
 	fn primary_selection_state(
 		&self,
 	) -> &smithay::wayland::selection::primary_selection::PrimarySelectionState {
@@ -185,7 +185,7 @@ impl PrimarySelectionHandler for StrataState {
 	}
 }
 
-delegate_primary_selection!(StrataState);
+delegate_primary_selection!(SharedStrataState);
 delegate_output!(StrataState);
 
 impl WlrLayerShellHandler for StrataState {

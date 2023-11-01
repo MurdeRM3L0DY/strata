@@ -6,6 +6,7 @@ pub mod layouts;
 pub mod state;
 pub mod tiling;
 pub mod workspaces;
+mod lua;
 
 use crate::{
 	backends::init_with_backend,
