@@ -1,21 +1,13 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{
-	cell::RefCell,
-	rc::Rc,
-};
-
 use piccolo::{
 	self as lua,
 	FromValue,
 	IntoValue,
 };
 
-use crate::{
-	handlers::input::ModFlags,
-	state::StrataComp,
-};
+use crate::handlers::input::ModFlags;
 
 impl<'gc> FromValue<'gc> for ModFlags {
 	fn from_value(_: lua::Context<'gc>, value: lua::Value<'gc>) -> Result<Self, lua::TypeError> {
@@ -27,28 +19,37 @@ impl<'gc> FromValue<'gc> for ModFlags {
 					match v {
 						lua::Value::UserData(ud) => {
 							let bits = *ud.downcast_static::<Self>().map_err(|_| {
-								lua::TypeError { expected: "Mod", found: value.type_name() }
+								lua::TypeError {
+									expected: "Mod",
+									found: value.type_name(),
+								}
 							})?;
 
 							r |= bits;
 						}
 						_ => {
-							return Err(lua::TypeError { expected: "Mod", found: v.type_name() });
+							return Err(lua::TypeError {
+								expected: "Mod",
+								found: v.type_name(),
+							});
 						}
 					};
 				}
 
 				return Ok(r);
 			}
-			_ => Err(lua::TypeError { found: value.type_name(), expected: "table" }),
+			_ => {
+				Err(lua::TypeError {
+					found: value.type_name(),
+					expected: "table",
+				})
+			}
 		}
 	}
 }
 
-pub fn module<'gc>(
-	ctx: lua::Context<'gc>,
-	comp: Rc<RefCell<StrataComp>>,
-) -> anyhow::Result<lua::Value<'gc>> {
+pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+	let modf = lua::Table::new(&ctx);
 	let meta = lua::Table::new(&ctx);
 
 	meta.set(
@@ -59,8 +60,7 @@ pub fn module<'gc>(
 
 			let k = stack.consume::<lua::String>(ctx)?;
 			let k = k.to_str()?;
-			let bits =
-				ModFlags::from_name(k).ok_or_else(|| anyhow::anyhow!("invalid Mod key: {}", k))?;
+			let bits = ModFlags::from_name(k).ok_or_else(|| anyhow::anyhow!("invalid Mod key: {}", k))?;
 			let bits = lua::UserData::new_static(&ctx, bits);
 
 			let bits_meta = lua::Table::new(&ctx);
@@ -83,9 +83,7 @@ pub fn module<'gc>(
 		}),
 	)?;
 
-	let ud = lua::UserData::new_static(&ctx, comp);
+	modf.set_metatable(&ctx, Some(meta));
 
-	ud.set_metatable(&ctx, Some(meta));
-
-	Ok(lua::Value::UserData(ud))
+	Ok(lua::Value::Table(modf))
 }

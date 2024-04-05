@@ -119,40 +119,83 @@ pub struct StrataState {
 }
 
 impl StrataState {
-	pub fn process_input_event<I: InputBackend>(
-		&mut self,
-		event: InputEvent<I>,
-	) -> anyhow::Result<()> {
+	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
 		match event {
-			InputEvent::Keyboard { event, .. } => self.keyboard::<I>(event)?,
-			InputEvent::PointerMotion { event, .. } => self.pointer_motion::<I>(event)?,
-			InputEvent::PointerMotionAbsolute { event, .. } => {
-				self.pointer_motion_absolute::<I>(event)?
-			}
-			InputEvent::PointerButton { event, .. } => self.pointer_button::<I>(event)?,
-			InputEvent::PointerAxis { event, .. } => self.pointer_axis::<I>(event)?,
-			InputEvent::DeviceAdded { device: _ } => {
+			InputEvent::Keyboard {
+				event, ..
+			} => self.keyboard::<I>(event)?,
+			InputEvent::PointerMotion {
+				event, ..
+			} => self.pointer_motion::<I>(event)?,
+			InputEvent::PointerMotionAbsolute {
+				event, ..
+			} => self.pointer_motion_absolute::<I>(event)?,
+			InputEvent::PointerButton {
+				event, ..
+			} => self.pointer_button::<I>(event)?,
+			InputEvent::PointerAxis {
+				event, ..
+			} => self.pointer_axis::<I>(event)?,
+			InputEvent::DeviceAdded {
+				device: _,
+			} => {
 				// todo
 				println!("device added");
 			}
-			InputEvent::DeviceRemoved { device: _ } => todo!(),
-			InputEvent::GestureSwipeBegin { event: _ } => todo!(),
-			InputEvent::GestureSwipeUpdate { event: _ } => todo!(),
-			InputEvent::GestureSwipeEnd { event: _ } => todo!(),
-			InputEvent::GesturePinchBegin { event: _ } => todo!(),
-			InputEvent::GesturePinchUpdate { event: _ } => todo!(),
-			InputEvent::GesturePinchEnd { event: _ } => todo!(),
-			InputEvent::GestureHoldBegin { event: _ } => todo!(),
-			InputEvent::GestureHoldEnd { event: _ } => todo!(),
-			InputEvent::TouchDown { event: _ } => todo!(),
-			InputEvent::TouchMotion { event: _ } => todo!(),
-			InputEvent::TouchUp { event: _ } => todo!(),
-			InputEvent::TouchCancel { event: _ } => todo!(),
-			InputEvent::TouchFrame { event: _ } => todo!(),
-			InputEvent::TabletToolAxis { event: _ } => todo!(),
-			InputEvent::TabletToolProximity { event: _ } => todo!(),
-			InputEvent::TabletToolTip { event: _ } => todo!(),
-			InputEvent::TabletToolButton { event: _ } => todo!(),
+			InputEvent::DeviceRemoved {
+				device: _,
+			} => todo!(),
+			InputEvent::GestureSwipeBegin {
+				event: _,
+			} => todo!(),
+			InputEvent::GestureSwipeUpdate {
+				event: _,
+			} => todo!(),
+			InputEvent::GestureSwipeEnd {
+				event: _,
+			} => todo!(),
+			InputEvent::GesturePinchBegin {
+				event: _,
+			} => todo!(),
+			InputEvent::GesturePinchUpdate {
+				event: _,
+			} => todo!(),
+			InputEvent::GesturePinchEnd {
+				event: _,
+			} => todo!(),
+			InputEvent::GestureHoldBegin {
+				event: _,
+			} => todo!(),
+			InputEvent::GestureHoldEnd {
+				event: _,
+			} => todo!(),
+			InputEvent::TouchDown {
+				event: _,
+			} => todo!(),
+			InputEvent::TouchMotion {
+				event: _,
+			} => todo!(),
+			InputEvent::TouchUp {
+				event: _,
+			} => todo!(),
+			InputEvent::TouchCancel {
+				event: _,
+			} => todo!(),
+			InputEvent::TouchFrame {
+				event: _,
+			} => todo!(),
+			InputEvent::TabletToolAxis {
+				event: _,
+			} => todo!(),
+			InputEvent::TabletToolProximity {
+				event: _,
+			} => todo!(),
+			InputEvent::TabletToolTip {
+				event: _,
+			} => todo!(),
+			InputEvent::TabletToolButton {
+				event: _,
+			} => todo!(),
 			InputEvent::Special(_) => todo!(),
 			// _ => anyhow::bail!("unhandled winit event: {:#?}", &event),
 		};
@@ -164,10 +207,8 @@ impl StrataState {
 		let serial = SERIAL_COUNTER.next_serial();
 		let time = Event::time_msec(&event);
 
-		// println!("key: {:#?}, {:#?}", Key::from_name("b"), Keysym::b);
-
 		let keyboard = self.comp.borrow().seat.get_keyboard().unwrap();
-		let f = keyboard.input(
+		let k = keyboard.input(
 			&mut self.comp.borrow_mut(),
 			event.key_code(),
 			event.state(),
@@ -185,11 +226,11 @@ impl StrataState {
 							key: keysym_h.modified_sym().into(),
 						};
 
-						if let Some(f) = comp.config.keybinds.get(&k) {
-							return FilterResult::Intercept(f.clone());
+						if comp.config.keybinds.contains_key(&k) {
+							FilterResult::Intercept(k)
+						} else {
+							FilterResult::Forward
 						}
-
-						FilterResult::Forward
 					}
 					KeyState::Released => {
 						return FilterResult::Forward;
@@ -198,9 +239,10 @@ impl StrataState {
 			},
 		);
 
-		if let Some(f) = f {
+		if let Some(k) = k {
+			let keybinds = &self.comp.borrow().config.keybinds;
 			let ex = self.lua.try_enter(|ctx| {
-				let f = ctx.fetch(&f);
+				let f = ctx.fetch(keybinds.get(&k).unwrap());
 				Ok(ctx.stash(lua::Executor::start(ctx, f, ())))
 			})?;
 
@@ -210,10 +252,7 @@ impl StrataState {
 		Ok(())
 	}
 
-	pub fn pointer_motion<I: InputBackend>(
-		&mut self,
-		event: I::PointerMotionEvent,
-	) -> anyhow::Result<()> {
+	pub fn pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) -> anyhow::Result<()> {
 		self.comp.borrow_mut().pointer_motion::<I>(event)?;
 
 		Ok(())
@@ -228,19 +267,13 @@ impl StrataState {
 		Ok(())
 	}
 
-	pub fn pointer_button<I: InputBackend>(
-		&mut self,
-		event: I::PointerButtonEvent,
-	) -> anyhow::Result<()> {
+	pub fn pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) -> anyhow::Result<()> {
 		self.comp.borrow_mut().pointer_button::<I>(event)?;
 
 		Ok(())
 	}
 
-	pub fn pointer_axis<I: InputBackend>(
-		&mut self,
-		event: I::PointerAxisEvent,
-	) -> anyhow::Result<()> {
+	pub fn pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) -> anyhow::Result<()> {
 		self.comp.borrow_mut().pointer_axis::<I>(event)?;
 
 		Ok(())
@@ -340,6 +373,7 @@ impl StrataComp {
 			.render_output(self.backend.renderer(), 0, &render_elements, [0.1, 0.1, 0.1, 1.0])
 			.unwrap();
 	}
+
 	pub fn surface_under(&self) -> Option<(FocusTarget, Point<i32, Logical>)> {
 		let pos = self.seat.get_pointer().unwrap().current_location();
 		let output = self.workspaces.current().outputs().find(|o| {
@@ -350,8 +384,9 @@ impl StrataComp {
 		let layers = layer_map_for_output(output);
 
 		let mut under = None;
-		if let Some(layer) =
-			layers.layer_under(Layer::Overlay, pos).or_else(|| layers.layer_under(Layer::Top, pos))
+		if let Some(layer) = layers
+			.layer_under(Layer::Overlay, pos)
+			.or_else(|| layers.layer_under(Layer::Top, pos))
 		{
 			let layer_loc = layers.layer_geometry(layer).unwrap().loc;
 			under = Some((layer.clone().into(), output_geo.loc + layer_loc))
@@ -418,12 +453,16 @@ impl StrataComp {
 		self.switch_to_workspace(id);
 	}
 
-	pub fn quit(&mut self) {
+	pub fn quit(&self) {
 		self.loop_signal.stop();
 	}
 
 	pub fn spawn(&mut self, command: &str) {
-		Command::new("/bin/sh").arg("-c").arg(command).spawn().expect("Failed to spawn command");
+		Command::new("/bin/sh")
+			.arg("-c")
+			.arg(command)
+			.spawn()
+			.expect("Failed to spawn command");
 	}
 
 	pub fn handle_mods<I: InputBackend>(
@@ -470,8 +509,8 @@ impl StrataComp {
 				// "lock" key modifiers (Caps Lock, Num Lock, etc...) => `depressed` == `locked`
 				// "normal" key modifiers (Control_*, Shift_*, etc...) => `depressed` > 0
 				// "normal" keys (a, s, d, f) => `depressed` == 0
-				let is_modifier = new_modstate.serialized.depressed
-					> new_modstate.serialized.locked - old_modstate.serialized.locked;
+				let is_modifier =
+					new_modstate.serialized.depressed > new_modstate.serialized.locked - old_modstate.serialized.locked;
 
 				if is_modifier && depressed {
 					self.mods.flags ^= modflag;
@@ -490,9 +529,7 @@ pub struct StrataConfig {
 	pub keybinds: HashMap<KeyPattern, lua::StashedFunction>,
 }
 
-pub fn init_wayland_listener(
-	event_loop: &EventLoop<StrataState>,
-) -> (Display<StrataComp>, OsString) {
+pub fn init_wayland_listener(event_loop: &EventLoop<StrataState>) -> (Display<StrataComp>, OsString) {
 	let loop_handle = event_loop.handle();
 	let mut display: Display<StrataComp> = Display::new().unwrap();
 	let listening_socket = ListeningSocketSource::new_auto().unwrap();
@@ -533,5 +570,6 @@ pub struct ClientState {
 }
 impl ClientData for ClientState {
 	fn initialized(&self, _client_id: ClientId) {}
+
 	fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }

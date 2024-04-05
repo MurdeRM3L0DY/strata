@@ -4,29 +4,42 @@
 mod key;
 mod modflags;
 
-use std::{
-	cell::RefCell,
-	rc::Rc,
-};
-
-use crate::state::StrataComp;
 use piccolo::{
 	self as lua,
 };
 
-pub fn module<'gc>(
-	ctx: lua::Context<'gc>,
-	comp: Rc<RefCell<StrataComp>>,
-) -> anyhow::Result<lua::Value<'gc>> {
-	let ud = lua::UserData::new_static(&ctx, comp.clone());
-	let meta = lua::Table::new(&ctx);
+use crate::{
+	bindings::CtxExt,
+	handlers::input::{
+		Key,
+		KeyPattern,
+		ModFlags,
+	},
+};
 
-	let index = lua::Table::new(&ctx);
-	index.set(ctx, "Key", key::module(ctx, comp.clone())?)?;
-	index.set(ctx, "Mod", modflags::module(ctx, comp.clone())?)?;
+pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+	let input = lua::Table::new(&ctx);
+	input.set(ctx, "Key", key::module(ctx)?)?;
+	input.set(ctx, "Mod", modflags::module(ctx)?)?;
+	input.set(
+		ctx,
+		"keybind",
+		lua::Callback::from_fn(&ctx, |ctx, _, mut stack| {
+			let comp = ctx.comp()?;
+			let (mods, key, cb) = stack.consume::<(ModFlags, Key, lua::Function)>(ctx)?;
 
-	meta.set(ctx, lua::MetaMethod::Index, index)?;
-	ud.set_metatable(&ctx, Some(meta));
+			let keypat = KeyPattern {
+				mods,
+				key,
+			};
 
-	Ok(lua::Value::UserData(ud))
+			comp.borrow_mut().config.keybinds.insert(keypat, ctx.stash(cb));
+
+			println!("{:#?}: {:#?}", mods, key);
+
+			Ok(lua::CallbackReturn::Return)
+		}),
+	)?;
+
+	Ok(lua::Value::Table(input))
 }
