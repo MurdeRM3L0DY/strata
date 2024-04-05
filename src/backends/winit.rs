@@ -1,15 +1,12 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::{
-	bindings,
-	decorations::BorderShader,
-	state::{
-		self,
-		StrataComp,
-		StrataState,
-	},
+use std::{
+	cell::RefCell,
+	rc::Rc,
+	time::Duration,
 };
+
 use piccolo::{
 	self as lua,
 };
@@ -40,10 +37,15 @@ use smithay::{
 	},
 	utils::Transform,
 };
-use std::{
-	cell::RefCell,
-	rc::Rc,
-	time::Duration,
+
+use crate::{
+	bindings,
+	decorations::BorderShader,
+	state::{
+		self,
+		StrataComp,
+		StrataState,
+	},
 };
 
 pub fn init_winit() {
@@ -51,7 +53,10 @@ pub fn init_winit() {
 	let (display, socket) = state::init_wayland_listener(&event_loop);
 	let display_handle = display.handle();
 	let (backend, mut winit) = winit::init().unwrap();
-	let mode = Mode { size: backend.window_size(), refresh: 60_000 };
+	let mode = Mode {
+		size: backend.window_size(),
+		refresh: 60_000,
+	};
 	let output = Output::new(
 		"winit".to_string(),
 		PhysicalProperties {
@@ -94,7 +99,9 @@ pub fn init_winit() {
 
 	let ex = lua_vm
 		.try_enter(|ctx| {
-			bindings::register(ctx, Rc::clone(&comp))?;
+			let strata = lua::UserData::new_static(&ctx, comp.clone());
+			strata.set_metatable(&ctx, Some(bindings::metatable(ctx)?));
+			ctx.globals().set(ctx, "strata", strata)?;
 
 			let main = lua::Closure::load(
 				ctx,
@@ -103,15 +110,12 @@ pub fn init_winit() {
 				local Key = strata.input.Key
 				local Mod = strata.input.Mod
 
-				-- print(Mod.Super_L)
-				-- print(Key.Escape)
-
-				local _ = Key({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
+				strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
 					strata.spawn('kitty')
 				end)
 
-				local _ = Key({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
-					strata:quit()
+				strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
+					strata.quit()
 				end)
 				"#
 				.as_bytes(),
@@ -125,7 +129,11 @@ pub fn init_winit() {
 		println!("{:#?}", e);
 	}
 
-	let mut data = StrataState { lua: lua_vm, comp, display };
+	let mut data = StrataState {
+		lua: lua_vm,
+		comp,
+		display,
+	};
 	event_loop.run(None, &mut data, move |_| {}).unwrap();
 }
 
@@ -133,12 +141,22 @@ pub fn winit_dispatch(winit: &mut WinitEventLoop, state: &mut StrataState, outpu
 	// process winit events
 	let res = winit.dispatch_new_events(|event| {
 		match event {
-			WinitEvent::Resized { size, .. } => {
-				output.change_current_state(Some(Mode { size, refresh: 60_000 }), None, None, None);
+			WinitEvent::Resized {
+				size, ..
+			} => {
+				output.change_current_state(
+					Some(Mode {
+						size,
+						refresh: 60_000,
+					}),
+					None,
+					None,
+					None,
+				);
 			}
 			WinitEvent::Input(event) => {
 				if let Err(e) = state.process_input_event(event) {
-					panic!("{:#?}", e);
+					println!("{:#?}", e);
 				}
 			}
 			_ => (),

@@ -7,15 +7,29 @@ use std::{
 	rc::Rc,
 };
 
-use piccolo as lua;
+use piccolo::{
+	self as lua,
+	FromValue,
+};
 
 use crate::state::StrataComp;
 
+trait CtxExt<'gc> {
+	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<StrataComp>>>;
+}
+
+impl<'gc> CtxExt<'gc> for lua::Context<'gc> {
+	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<StrataComp>>> {
+		let comp = lua::UserData::from_value(self, self.globals().get(self, "strata"))?;
+		Ok(comp.downcast_static::<Rc<RefCell<StrataComp>>>()?)
+	}
+}
+
 pub mod input;
 
-pub fn register<'gc>(ctx: lua::Context<'gc>, comp: Rc<RefCell<StrataComp>>) -> anyhow::Result<()> {
+pub fn metatable<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Table<'gc>> {
 	let index = lua::Table::new(&ctx);
-	index.set(ctx, "input", input::module(ctx, comp.clone())?)?;
+	index.set(ctx, "input", input::module(ctx)?)?;
 	index.set(
 		ctx,
 		"spawn",
@@ -29,24 +43,17 @@ pub fn register<'gc>(ctx: lua::Context<'gc>, comp: Rc<RefCell<StrataComp>>) -> a
 	index.set(
 		ctx,
 		"quit",
-		lua::Callback::from_fn(&ctx, |ctx, _, mut stack| {
-			let comp = stack
-				.consume::<lua::UserData>(ctx)?
-				.downcast_static::<Rc<RefCell<StrataComp>>>()?;
+		lua::Callback::from_fn(&ctx, |ctx, _, _| {
+			let comp = ctx.comp()?;
 
-			comp.borrow_mut().quit();
+			comp.borrow().quit();
 
 			Ok(lua::CallbackReturn::Return)
 		}),
 	)?;
 
-	let strata = lua::UserData::new_static(&ctx, comp.clone());
-
 	let meta = lua::Table::new(&ctx);
 	meta.set(ctx, lua::MetaMethod::Index, index)?;
 
-	strata.set_metatable(&ctx, Some(meta));
-	ctx.globals().set(ctx, "strata", strata)?;
-
-	Ok(())
+	Ok(meta)
 }
