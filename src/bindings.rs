@@ -15,13 +15,13 @@ use piccolo::{
 use crate::state::Compositor;
 
 trait CtxExt<'gc> {
-	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<StrataComp>>>;
+	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<Compositor>>>;
 }
 
 impl<'gc> CtxExt<'gc> for lua::Context<'gc> {
-	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<StrataComp>>> {
+	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<Compositor>>> {
 		let comp = lua::UserData::from_value(self, self.globals().get(self, "strata"))?;
-		Ok(comp.downcast_static::<Rc<RefCell<StrataComp>>>()?)
+		Ok(comp.downcast_static::<Rc<RefCell<Compositor>>>()?)
 	}
 }
 

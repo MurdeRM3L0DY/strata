@@ -1,10 +1,7 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{
-	error::Error,
-	io::stdout,
-};
+use std::io::stdout;
 
 use chrono::Local;
 use clap::Parser;
@@ -13,8 +10,11 @@ use smithay::reexports::calloop::EventLoop;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::{
-	backends::init_with_backend,
-	state::Strata,
+	backends::Backend,
+	state::{
+		Compositor,
+		Strata,
+	},
 };
 
 pub mod backends;
@@ -50,16 +50,22 @@ async fn main() -> anyhow::Result<()> {
 	let log_appender = stdout.and(file_appender).and(latest_file_appender);
 
 	if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-		tracing_subscriber::fmt().with_writer(log_appender).with_env_filter(env_filter).init();
+		tracing_subscriber::fmt()
+			.with_writer(log_appender)
+			.with_env_filter(env_filter)
+			.init();
 	} else {
 		tracing_subscriber::fmt().with_writer(log_appender).init();
 	}
 
 	info!("Initializing Strata WM");
-	let event_loop = EventLoop::<Strata>::try_new()?;
-	let state = Strata::new();
 
-	init_with_backend(&args.backend);
+	let mut event_loop = EventLoop::try_new()?;
+	let mut comp = Compositor::new(&event_loop)?;
+	comp.backend = Backend::from_str(&args.backend, &mut comp)?;
+
+	let mut state = Strata::new(comp);
+	event_loop.run(None, &mut state, move |_| {})?;
 
 	info!("Quitting Strata WM");
 

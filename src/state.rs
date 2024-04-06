@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-	cell::RefCell,
+	cell::{
+		Cell,
+		RefCell,
+	},
 	collections::HashMap,
 	ffi::OsString,
-	os::fd::AsRawFd,
 	process::Command,
 	rc::Rc,
 	sync::Arc,
@@ -15,8 +17,9 @@ use std::{
 	},
 };
 
-use piccolo as lua;
-use piccolo::Lua;
+use piccolo::{
+	self as lua,
+};
 use smithay::{
 	backend::input::{
 		Event,
@@ -29,6 +32,8 @@ use smithay::{
 		layer_map_for_output,
 		space::SpaceElement,
 		PopupManager,
+		Space,
+		Window,
 	},
 	input::{
 		keyboard::{
@@ -42,10 +47,7 @@ use smithay::{
 	},
 	reexports::{
 		calloop::{
-			generic::{
-				FdWrapper,
-				Generic,
-			},
+			generic::Generic,
 			EventLoop,
 			Interest,
 			LoopHandle,
@@ -96,6 +98,7 @@ use smithay::{
 
 use crate::{
 	backends::Backend,
+	bindings,
 	decorations::BorderShader,
 	handlers::input::{
 		KeyPattern,
@@ -114,26 +117,52 @@ pub struct Strata {
 }
 
 impl Strata {
-	pub fn new(
-		display: Display<Compositor>,
-		socket: OsString,
-		loop_signal: LoopSignal,
-		loop_handle: LoopHandle<Compositor>,
-	) -> Self {
-		let mut comp = Rc::new(RefCell::new(Compositor::new(
-			loop_handle,
-			loop_signal,
-			&display,
-			socket,
-			"Strata".to_string(),
-		)));
-		let lua = Lua::full();
-		Strata { lua, comp, display, backend: Backend::Unset }
+	pub fn new(comp: Compositor) -> Self {
+		let mut lua = lua::Lua::full();
+
+		std::env::set_var("WAYLAND_DISPLAY", &comp.socket_name);
+
+		let comp = Rc::new(RefCell::new(comp));
+
+		let ex = lua
+			.try_enter(|ctx| {
+				let strata = lua::UserData::new_static(&ctx, comp.clone());
+				strata.set_metatable(&ctx, Some(bindings::metatable(ctx)?));
+				ctx.globals().set(ctx, "strata", strata)?;
+
+				let main = lua::Closure::load(
+					ctx,
+					None,
+					r#"
+					local Key = strata.input.Key
+					local Mod = strata.input.Mod
+
+					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
+						strata.spawn('kitty')
+					end)
+
+					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
+						strata.quit()
+					end)
+					"#
+					.as_bytes(),
+				)?;
+
+				Ok(ctx.stash(lua::Executor::start(ctx, main.into(), ())))
+			})
+			.unwrap();
+
+		if let Err(e) = lua.execute::<()>(&ex) {
+			println!("{:#?}", e);
+		}
+
+		Strata {
+			lua,
+			comp,
+		}
 	}
-	pub fn process_input_event<I: InputBackend>(
-		&mut self,
-		event: InputEvent<I>,
-	) -> anyhow::Result<()> {
+
+	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
 		match event {
 			InputEvent::Keyboard {
 				event, ..
@@ -296,8 +325,9 @@ impl Strata {
 
 pub struct Compositor {
 	pub backend: Backend,
-	pub dh: DisplayHandle,
-	pub start_time: Instant,
+	pub display_handle: DisplayHandle,
+	pub loop_handle: LoopHandle<'static, Strata>,
+	pub clock: Instant,
 	pub loop_signal: LoopSignal,
 	pub compositor_state: CompositorState,
 	pub xdg_shell_state: XdgShellState,
@@ -309,6 +339,7 @@ pub struct Compositor {
 	pub seat_state: SeatState<Compositor>,
 	pub layer_shell_state: WlrLayerShellState,
 	pub popup_manager: PopupManager,
+	pub space: Space<Window>,
 	pub seat: Seat<Compositor>,
 	pub socket_name: OsString,
 	pub workspaces: Workspaces,
@@ -317,26 +348,39 @@ pub struct Compositor {
 }
 
 impl Compositor {
-	pub fn new(
-		loop_handle: LoopHandle<Compositor>,
-		loop_signal: LoopSignal,
-		display: &Display<Compositor>,
-		socket_name: OsString,
-		seat_name: String,
-	) -> Self {
-		let start_time = Instant::now();
-		let dh = display.handle();
-		let compositor_state = CompositorState::new::<Self>(&dh);
-		let xdg_shell_state = XdgShellState::new::<Self>(&dh);
-		let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
-		let shm_state = ShmState::new::<Self>(&dh, vec![]);
-		let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
-		let mut seat_state = SeatState::new();
-		let data_device_state = DataDeviceState::new::<Self>(&dh);
-		let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
-		let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+	pub fn new(event_loop: &EventLoop<'static, Strata>) -> anyhow::Result<Self> {
+		let display = Display::<Self>::new()?;
 
-		let mut seat = seat_state.new_wl_seat(&dh, seat_name);
+		let loop_handle = event_loop.handle();
+		let display_handle = display.handle();
+
+		let listening_socket = ListeningSocketSource::new_auto().unwrap();
+		let socket_name = listening_socket.socket_name().to_os_string();
+		loop_handle
+			.insert_source(listening_socket, move |client_stream, _, state| {
+				// You may also associate some data with the client when inserting the client.
+				state
+					.comp
+					.borrow_mut()
+					.display_handle
+					.insert_client(client_stream, Arc::new(ClientState::default()))
+					.unwrap();
+			})
+			.expect("Failed to init the wayland event source.");
+
+		loop_handle
+			.insert_source(
+				Generic::new(display, Interest::READ, Mode::Level),
+				|_, display, state| {
+					let display = unsafe { display.get_mut() };
+					display.dispatch_clients(&mut state.comp.borrow_mut())?;
+					Ok(PostAction::Continue)
+				},
+			)
+			.unwrap();
+
+		let mut seat_state = SeatState::new();
+		let mut seat = seat_state.new_wl_seat(&display_handle, "Strata");
 		let keyboard = seat
 			.add_keyboard(
 				XkbConfig {
@@ -354,41 +398,75 @@ impl Compositor {
 		let workspaces = Workspaces::new(config_workspace);
 		let mods_state = keyboard.modifier_state();
 
-		Compositor {
-			dh,
-			start_time,
-			socket_name,
+		let compositor_state = CompositorState::new::<Compositor>(&display_handle);
+		let xdg_shell_state = XdgShellState::new::<Compositor>(&display_handle);
+		let xdg_decoration_state = XdgDecorationState::new::<Compositor>(&display_handle);
+		let shm_state = ShmState::new::<Compositor>(&display_handle, vec![]);
+		let output_manager_state = OutputManagerState::new_with_xdg_output::<Compositor>(&display_handle);
+		let data_device_state = DataDeviceState::new::<Compositor>(&display_handle);
+		let primary_selection_state = PrimarySelectionState::new::<Compositor>(&display_handle);
+		let layer_shell_state = WlrLayerShellState::new::<Compositor>(&display_handle);
+
+		Ok(Compositor {
+			backend: Backend::Unset,
+			display_handle,
+			loop_handle,
+			clock: Instant::now(),
+			loop_signal: event_loop.get_signal(),
 			compositor_state,
 			xdg_shell_state,
 			xdg_decoration_state,
-			loop_signal,
 			shm_state,
 			output_manager_state,
-			popup_manager: PopupManager::default(),
-			seat_state,
 			data_device_state,
 			primary_selection_state,
+			seat_state,
 			layer_shell_state,
+			popup_manager: PopupManager::default(),
+			space: Space::<Window>::default(),
 			seat,
+			socket_name,
 			workspaces,
-			mods: Mods { flags: ModFlags::empty(), state: mods_state },
-			config: StrataConfig { keybinds: HashMap::new() },
-		}
+			mods: Mods {
+				flags: ModFlags::empty(),
+				state: mods_state,
+			},
+			config: StrataConfig {
+				keybinds: HashMap::new(),
+			},
+		})
 	}
 
-	fn winit_render(&mut self) {
-		let render_elements =
-			self.workspaces.current().render_elements(self.backend.winit().backend.renderer());
-		self.backend
-			.winit()
+	pub fn winit_render_elements(&mut self) {
+		let winit_mut = self.backend.winit_mut();
+		let renderer = winit_mut.backend.renderer();
+		let render_elements = self.workspaces.current().render_elements(renderer);
+
+		winit_mut
 			.damage_tracker
-			.render_output(
-				self.backend.winit().backend.renderer(),
-				0,
-				&render_elements,
-				[0.1, 0.1, 0.1, 1.0],
-			)
+			.render_output(renderer, 0, &render_elements, [0.1, 0.1, 0.1, 1.0])
 			.unwrap();
+
+		// self.set_input_focus_auto();
+		//
+		// // damage tracking
+		// let size = self.backend.winit().backend.window_size();
+		// let damage = Rectangle::from_loc_and_size((0, 0), size);
+		// self.backend.winit_mut().backend.bind().unwrap();
+		// self.backend.winit_mut().backend.submit(Some(&[damage])).unwrap();
+		//
+		// // sync and cleanups
+		// let output = self.workspaces.current().outputs().next().unwrap();
+		// self.workspaces.current().windows().for_each(|window| {
+		// 	window.send_frame(output, self.clock.elapsed(), Some(Duration::ZERO),
+		// |_, _| { 		Some(output.clone())
+		// 	});
+		//
+		// 	window.refresh();
+		// });
+		// self.display_handle.flush_clients().unwrap();
+		// self.popup_manager.cleanup();
+		// BorderShader::cleanup(self.backend.winit_mut().backend.renderer());
 	}
 
 	pub fn surface_under(&self) -> Option<(FocusTarget, Point<i32, Logical>)> {
@@ -417,31 +495,6 @@ impl Compositor {
 			under = Some((layer.clone().into(), output_geo.loc + layer_loc));
 		};
 		under
-	}
-
-	pub fn winit_update(&mut self) {
-		self.winit_render();
-
-		self.set_input_focus_auto();
-
-		// damage tracking
-		let size = self.backend.winit().backend.window_size();
-		let damage = Rectangle::from_loc_and_size((0, 0), size);
-		self.backend.winit().backend.bind().unwrap();
-		self.backend.winit().backend.submit(Some(&[damage])).unwrap();
-
-		// sync and cleanups
-		let output = self.workspaces.current().outputs().next().unwrap();
-		self.workspaces.current().windows().for_each(|window| {
-			window.send_frame(output, self.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
-				Some(output.clone())
-			});
-
-			window.refresh();
-		});
-		self.dh.flush_clients().unwrap();
-		self.popup_manager.cleanup();
-		BorderShader::cleanup(self.backend.winit().backend.renderer());
 	}
 
 	pub fn close_window(&mut self) {
@@ -542,43 +595,19 @@ impl Compositor {
 	}
 }
 
-pub struct StrataConfig {
-	pub keybinds: HashMap<KeyPattern, lua::StashedFunction>,
+pub trait WithState {
+	type State;
+
+	fn with_state<F, T>(&self, f: F)
+	where
+		F: FnOnce(&Self::State) -> T;
+	fn with_state_mut<F, T>(&self, f: F)
+	where
+		F: FnOnce(&mut Self::State) -> T;
 }
 
-pub fn init_wayland_listener(event_loop: &EventLoop<Strata>) -> (Display<Compositor>, OsString) {
-	let loop_handle = event_loop.handle();
-	let mut display: Display<Compositor> = Display::new().unwrap();
-	let listening_socket = ListeningSocketSource::new_auto().unwrap();
-	let socket_name = listening_socket.socket_name().to_os_string();
-
-	loop_handle
-		.insert_source(listening_socket, move |client_stream, _, state| {
-			// You may also associate some data with the client when inserting the client.
-			state
-				.display
-				.handle()
-				.insert_client(client_stream, Arc::new(ClientState::default()))
-				.unwrap();
-		})
-		.expect("Failed to init the wayland event source.");
-
-	loop_handle
-		.insert_source(
-			Generic::new(
-				unsafe { FdWrapper::new(display.backend().poll_fd().as_raw_fd()) },
-				Interest::READ,
-				Mode::Level,
-			),
-			|_, _, state| {
-				state.display.dispatch_clients(&mut state.comp.borrow_mut())?;
-
-				Ok(PostAction::Continue)
-			},
-		)
-		.unwrap();
-
-	(display, socket_name)
+pub struct StrataConfig {
+	pub keybinds: HashMap<KeyPattern, lua::StashedFunction>,
 }
 
 #[derive(Default)]

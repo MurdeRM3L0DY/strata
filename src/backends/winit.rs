@@ -1,15 +1,7 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{
-	cell::RefCell,
-	rc::Rc,
-	time::Duration,
-};
-
-use piccolo::{
-	self as lua,
-};
+use std::time::Duration;
 
 use smithay::{
 	backend::{
@@ -24,6 +16,7 @@ use smithay::{
 			WinitGraphicsBackend,
 		},
 	},
+	desktop::space::SpaceElement,
 	output::{
 		Mode,
 		Output,
@@ -31,24 +24,22 @@ use smithay::{
 		Subpixel,
 	},
 	reexports::{
-		calloop::{
-			timer::{
-				TimeoutAction,
-				Timer,
-			},
-			EventLoop,
+		calloop::timer::{
+			TimeoutAction,
+			Timer,
 		},
 		winit::platform::pump_events::PumpStatus,
 	},
-	utils::Transform,
+	utils::{
+		Rectangle,
+		Transform,
+	},
 };
 
 use crate::{
 	backends::Backend,
-	bindings,
 	decorations::BorderShader,
 	state::{
-		self,
 		Compositor,
 		Strata,
 	},
@@ -59,119 +50,104 @@ pub struct WinitData {
 	pub damage_tracker: OutputDamageTracker,
 }
 
-pub fn init_winit() {
-	let mut event_loop: EventLoop<Strata> = EventLoop::try_new().unwrap();
-	let (display, socket) = state::init_wayland_listener(&event_loop);
-	let display_handle = display.handle();
-	let (backend, mut winit) = winit::init().unwrap();
-	let mode = Mode {
-		size: backend.window_size(),
-		refresh: 60_000,
-	};
-	let output = Output::new(
-		"winit".to_string(),
-		PhysicalProperties {
-			size: (0, 0).into(),
-			subpixel: Subpixel::Unknown,
-			make: "Strata".into(),
-			model: "Winit".into(),
-		},
-	);
-	let _global = output.create_global::<Compositor>(&display_handle);
-	output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
-	output.set_preferred(mode);
-	let damage_tracker = OutputDamageTracker::from_output(&output);
-	let mut comp = Compositor::new(
-		&event_loop,
-		&display,
-		socket,
-		"winit".to_string(),
-		Backend::Winit(WinitData { backend, damage_tracker }),
-	);
-	BorderShader::init(comp.backend.winit().backend.renderer());
-	for workspace in comp.workspaces.iter() {
-		workspace.add_output(output.clone());
+impl Strata {
+	pub fn winit_dispatch(&mut self, winit_loop: &mut WinitEventLoop, output: &Output) {
+		let res = winit_loop.dispatch_new_events(|event| {
+			match event {
+				WinitEvent::Resized {
+					size, ..
+				} => {
+					output.change_current_state(
+						Some(Mode {
+							size,
+							refresh: 60_000,
+						}),
+						None,
+						None,
+						None,
+					);
+				}
+				WinitEvent::Input(event) => {
+					if let Err(e) = self.process_input_event(event) {
+						println!("{:#?}", e);
+					}
+				}
+				_ => (),
+			}
+		});
+
+		if let PumpStatus::Exit(_) = res {
+			self.comp.borrow().loop_signal.stop();
+		} else {
+			self.winit_update();
+		}
 	}
 
-	std::env::set_var("WAYLAND_DISPLAY", &comp.socket_name);
+	fn winit_update(&mut self) {
+		let comp = &mut *self.comp.borrow_mut();
 
-	let timer = Timer::immediate();
-	event_loop
-		.handle()
-		.insert_source(timer, move |_, _, data| {
-			winit_dispatch(&mut winit, data, &output);
-			TimeoutAction::ToDuration(Duration::from_millis(16))
-		})
-		.unwrap();
+		comp.winit_render_elements();
 
-	let mut lua_vm = lua::Lua::full();
-	let comp = Rc::new(RefCell::new(comp));
+		comp.set_input_focus_auto();
 
-	let ex = lua_vm
-		.try_enter(|ctx| {
-			let strata = lua::UserData::new_static(&ctx, comp.clone());
-			strata.set_metatable(&ctx, Some(bindings::metatable(ctx)?));
-			ctx.globals().set(ctx, "strata", strata)?;
+		// damage tracking
+		let size = comp.backend.winit().backend.window_size();
+		let damage = Rectangle::from_loc_and_size((0, 0), size);
+		comp.backend.winit_mut().backend.bind().unwrap();
+		comp.backend.winit_mut().backend.submit(Some(&[damage])).unwrap();
 
-			let main = lua::Closure::load(
-				ctx,
-				None,
-				r#"
-				local Key = strata.input.Key
-				local Mod = strata.input.Mod
+		// sync and cleanups
+		let output = comp.workspaces.current().outputs().next().unwrap();
+		comp.workspaces.current().windows().for_each(|window| {
+			window.send_frame(output, comp.clock.elapsed(), Some(Duration::ZERO), |_, _| {
+				Some(output.clone())
+			});
 
-				strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
-					strata.spawn('kitty')
-				end)
-
-				strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
-					strata.quit()
-				end)
-				"#
-				.as_bytes(),
-			)?;
-
-			Ok(ctx.stash(lua::Executor::start(ctx, main.into(), ())))
-		})
-		.unwrap();
-
-	if let Err(e) = lua_vm.execute::<()>(&ex) {
-		println!("{:#?}", e);
+			window.refresh();
+		});
+		comp.display_handle.flush_clients().unwrap();
+		comp.popup_manager.cleanup();
+		BorderShader::cleanup(comp.backend.winit_mut().backend.renderer());
 	}
-
-	let mut data = Strata { lua: lua_vm, comp, display };
-	event_loop.run(None, &mut data, move |_| {}).unwrap();
 }
 
-pub fn winit_dispatch(winit: &mut WinitEventLoop, state: &mut Strata, output: &Output) {
-	// process winit events
-	let res = winit.dispatch_new_events(|event| {
-		match event {
-			WinitEvent::Resized {
-				size, ..
-			} => {
-				output.change_current_state(
-					Some(Mode {
-						size,
-						refresh: 60_000,
-					}),
-					None,
-					None,
-					None,
-				);
-			}
-			WinitEvent::Input(event) => {
-				if let Err(e) = state.process_input_event(event) {
-					println!("{:#?}", e);
-				}
-			}
-			_ => (),
-		}
-	});
+impl WinitData {
+	pub fn new(comp: &mut Compositor) -> anyhow::Result<Backend> {
+		let (mut backend, mut winit_loop) = winit::init().unwrap();
+		let mode = Mode {
+			size: backend.window_size(),
+			refresh: 60_000,
+		};
+		let output = Output::new(
+			"winit".to_string(),
+			PhysicalProperties {
+				size: (0, 0).into(),
+				subpixel: Subpixel::Unknown,
+				make: "Strata".into(),
+				model: "Winit".into(),
+			},
+		);
+		let _global = output.create_global::<Compositor>(&comp.display_handle);
+		output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
+		output.set_preferred(mode);
 
-	if let PumpStatus::Exit(_) = res {
-		state.comp.borrow().loop_signal.stop();
-	} else {
-		state.comp.borrow_mut().winit_update();
+		let damage_tracker = OutputDamageTracker::from_output(&output);
+
+		BorderShader::init(backend.renderer());
+		for workspace in comp.workspaces.iter() {
+			workspace.add_output(output.clone());
+		}
+
+		comp.loop_handle
+			.insert_source(Timer::immediate(), move |_, _, data| {
+				data.winit_dispatch(&mut winit_loop, &output);
+				TimeoutAction::ToDuration(Duration::from_millis(16))
+			})
+			.map_err(|_| anyhow::anyhow!("unable to insert winit timer source"))?;
+
+		Ok(Backend::Winit(WinitData {
+			backend,
+			damage_tracker,
+		}))
 	}
 }

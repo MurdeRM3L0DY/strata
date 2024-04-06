@@ -133,7 +133,7 @@ impl SeatHandler for Compositor {
 	) {
 	}
 	fn focus_changed(&mut self, seat: &smithay::input::Seat<Self>, focused: Option<&FocusTarget>) {
-		let dh = &self.dh;
+		let dh = &self.display_handle;
 
 		let focus =
 			focused.and_then(WaylandFocus::wl_surface).and_then(|s| dh.get_client(s.id()).ok());
