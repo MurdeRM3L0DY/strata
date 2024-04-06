@@ -1,9 +1,9 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lua::FromValue;
 use piccolo::{
 	self as lua,
+	FromValue
 };
 
 use crate::handlers::input::Key;

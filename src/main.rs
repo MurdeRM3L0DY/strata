@@ -9,9 +9,13 @@ use std::{
 use chrono::Local;
 use clap::Parser;
 use log::info;
+use smithay::reexports::calloop::EventLoop;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-use crate::backends::init_with_backend;
+use crate::{
+	backends::init_with_backend,
+	state::Strata,
+};
 
 pub mod backends;
 pub mod bindings;
@@ -32,16 +36,10 @@ pub struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 	let xdg = xdg::BaseDirectories::with_prefix("strata")?;
-	// let config_dir = xdg.find_config_file("");
-	// let lib_dir = xdg.find_data_file("lua");
 	let log_dir = xdg.get_state_home();
-
-	// if let (Some(config_path), Some(data_path)) = (config_dir, lib_dir) {
-	// 	tokio::spawn(async { parse_config(config_path, data_path) }).await??;
-	// }
 
 	let file_appender = tracing_appender::rolling::never(
 		&log_dir,
@@ -58,8 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 	}
 
 	info!("Initializing Strata WM");
-	info!("Parsing config...");
-	info!("Initializing socket interface...");
+	let event_loop = EventLoop::<Strata>::try_new()?;
+	let state = Strata::new();
 
 	init_with_backend(&args.backend);
 

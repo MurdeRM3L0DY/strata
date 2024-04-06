@@ -12,7 +12,7 @@ use piccolo::{
 	FromValue,
 };
 
-use crate::state::StrataComp;
+use crate::state::Compositor;
 
 trait CtxExt<'gc> {
 	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<StrataComp>>>;
@@ -45,7 +45,6 @@ pub fn metatable<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Table<'gc>>
 		"quit",
 		lua::Callback::from_fn(&ctx, |ctx, _, _| {
 			let comp = ctx.comp()?;
-
 			comp.borrow().quit();
 
 			Ok(lua::CallbackReturn::Return)
