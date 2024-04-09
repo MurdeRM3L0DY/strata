@@ -57,27 +57,27 @@ use crate::{
 
 impl XdgShellHandler for Compositor {
 	fn xdg_shell_state(&mut self) -> &mut XdgShellState {
-		&mut self.xdg_shell_state
+		self._xdg_shell_state()
 	}
 
 	fn new_toplevel(&mut self, surface: ToplevelSurface) {
 		let window = Window::new(surface);
-		self.workspaces.current_mut().add_window(Rc::new(RefCell::new(StrataWindow {
+		self.workspaces().current_mut().add_window(Rc::new(RefCell::new(StrataWindow {
 			smithay_window: window.clone(),
 			rec: window.geometry(),
 		})));
 	}
 	fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
 		let window =
-			self.workspaces.all_windows().find(|w| w.toplevel() == &surface).unwrap().clone();
+			self.workspaces().all_windows().find(|w| w.toplevel() == &surface).unwrap().clone();
 
-		self.workspaces.workspace_from_window(&window).unwrap().remove_window(&window);
+		self.workspaces().workspace_from_window(&window).unwrap().remove_window(&window);
 	}
 	fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
 		surface.with_pending_state(|state| {
 			state.geometry = positioner.get_geometry();
 		});
-		if let Err(err) = self.popup_manager.track_popup(PopupKind::from(surface)) {
+		if let Err(err) = self.popup_manager().track_popup(PopupKind::from(surface)) {
 			warn!("Failed to track popup: {}", err);
 		}
 	}

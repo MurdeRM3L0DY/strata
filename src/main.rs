@@ -6,7 +6,10 @@ use std::io::stdout;
 use chrono::Local;
 use clap::Parser;
 use log::info;
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::{
+	calloop::EventLoop,
+	wayland_server::Display,
+};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::{
@@ -61,11 +64,14 @@ async fn main() -> anyhow::Result<()> {
 	info!("Initializing Strata WM");
 
 	let mut event_loop = EventLoop::try_new()?;
-	let mut comp = Compositor::new(&event_loop)?;
-	comp.backend = Backend::from_str(&args.backend, &mut comp)?;
+	let mut display = Display::new()?;
+	let mut comp = Compositor::new(&event_loop, &mut display)?;
+	*comp.backend() = Backend::from_str(&args.backend, &mut comp)?;
 
-	let mut state = Strata::new(comp);
-	event_loop.run(None, &mut state, move |_| {})?;
+	let mut state = Strata::new(comp, display);
+	event_loop.run(None, &mut state, move |state| {
+		state.display.handle().flush_clients().unwrap();
+	})?;
 
 	info!("Quitting Strata WM");
 

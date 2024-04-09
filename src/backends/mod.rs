@@ -1,24 +1,12 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use log::error;
-use smithay::{
-	output::Output,
-	reexports::{
-		calloop::LoopHandle,
-		wayland_server::DisplayHandle,
-	},
-};
-
 use crate::{
 	backends::{
 		// udev::UdevData,
 		winit::WinitData,
 	},
-	state::{
-		Compositor,
-		Strata,
-	},
+	state::Compositor,
 };
 
 pub mod cursor;
@@ -33,14 +21,7 @@ pub enum Backend {
 }
 
 impl Backend {
-	pub fn winit(&self) -> &WinitData {
-		match self {
-			Backend::Winit(data) => data,
-			_ => unreachable!("Tried to retrieve Winit backend when not initialized with it."),
-		}
-	}
-
-	pub fn winit_mut(&mut self) -> &mut WinitData {
+	pub fn winit(&mut self) -> &mut WinitData {
 		match self {
 			Backend::Winit(data) => data,
 			_ => unreachable!("Tried to retrieve Winit backend when not initialized with it."),
@@ -54,10 +35,7 @@ impl Backend {
 	// it."), 	}
 	// }
 
-	pub fn from_str(
-		backend: &str,
-		comp: &mut Compositor,
-	) -> anyhow::Result<Self> {
+	pub fn from_str(backend: &str, comp: &mut Compositor) -> anyhow::Result<Self> {
 		Ok(match backend {
 			"winit" => WinitData::new(comp)?,
 			"udev" => {

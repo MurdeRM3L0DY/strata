@@ -33,7 +33,7 @@ pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 				key,
 			};
 
-			comp.borrow_mut().config.keybinds.insert(keypat, ctx.stash(cb));
+			comp.config().keybinds.insert(keypat, ctx.stash(cb));
 
 			println!("{:#?}: {:#?}", mods, key);
 

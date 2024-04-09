@@ -75,7 +75,7 @@ use crate::{
 
 impl CompositorHandler for Compositor {
 	fn compositor_state(&mut self) -> &mut CompositorState {
-		&mut self.compositor_state
+		self._compositor_state()
 	}
 
 	fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
@@ -90,13 +90,13 @@ impl CompositorHandler for Compositor {
 				root = parent;
 			}
 			if let Some(window) =
-				self.workspaces.all_windows().find(|w| w.toplevel().wl_surface() == &root)
+				self.workspaces().all_windows().find(|w| w.toplevel().wl_surface() == &root)
 			{
 				window.on_commit();
 			}
 		};
-		self.popup_manager.commit(surface);
-		handle_commit(&self.workspaces, surface, &self.popup_manager);
+		self.popup_manager().commit(surface);
+		handle_commit(&self.workspaces(), surface, &self.popup_manager());
 	}
 }
 
@@ -112,7 +112,7 @@ impl BufferHandler for Compositor {
 
 impl ShmHandler for Compositor {
 	fn shm_state(&self) -> &ShmState {
-		&self.shm_state
+		self._shm_state()
 	}
 }
 
@@ -123,7 +123,7 @@ impl SeatHandler for Compositor {
 	type PointerFocus = FocusTarget;
 
 	fn seat_state(&mut self) -> &mut SeatState<Compositor> {
-		&mut self.seat_state
+		self._seat_state()
 	}
 
 	fn cursor_image(
@@ -133,7 +133,7 @@ impl SeatHandler for Compositor {
 	) {
 	}
 	fn focus_changed(&mut self, seat: &smithay::input::Seat<Self>, focused: Option<&FocusTarget>) {
-		let dh = &self.display_handle;
+		let dh = self.display_handle();
 
 		let focus =
 			focused.and_then(WaylandFocus::wl_surface).and_then(|s| dh.get_client(s.id()).ok());
@@ -143,7 +143,7 @@ impl SeatHandler for Compositor {
 		if let Some(focus_target) = focused {
 			match focus_target {
 				FocusTarget::Window(w) => {
-					for window in self.workspaces.all_windows() {
+					for window in self.workspaces().all_windows() {
 						if window.eq(w) {
 							window.set_activated(true);
 						} else {
@@ -153,7 +153,7 @@ impl SeatHandler for Compositor {
 					}
 				}
 				FocusTarget::LayerSurface(_) => {
-					for window in self.workspaces.all_windows() {
+					for window in self.workspaces().all_windows() {
 						window.set_activated(false);
 						window.toplevel().send_configure();
 					}
@@ -172,7 +172,7 @@ impl SelectionHandler for Compositor {
 
 impl DataDeviceHandler for Compositor {
 	fn data_device_state(&self) -> &smithay::wayland::selection::data_device::DataDeviceState {
-		&self.data_device_state
+		self._data_device_state()
 	}
 }
 
@@ -185,7 +185,7 @@ impl PrimarySelectionHandler for Compositor {
 	fn primary_selection_state(
 		&self,
 	) -> &smithay::wayland::selection::primary_selection::PrimarySelectionState {
-		&self.primary_selection_state
+		self._primary_selection_state()
 	}
 }
 
@@ -194,7 +194,7 @@ delegate_output!(Compositor);
 
 impl WlrLayerShellHandler for Compositor {
 	fn shell_state(&mut self) -> &mut WlrLayerShellState {
-		&mut self.layer_shell_state
+		self._layer_shell_state()
 	}
 
 	fn new_layer_surface(
@@ -207,19 +207,19 @@ impl WlrLayerShellHandler for Compositor {
 		let output = output
 			.as_ref()
 			.and_then(Output::from_resource)
-			.unwrap_or_else(|| self.workspaces.current().outputs().next().unwrap().clone());
+			.unwrap_or_else(|| self.workspaces().current().outputs().next().unwrap().clone());
 		let mut map = layer_map_for_output(&output);
 		let layer_surface = LayerSurface::new(surface, namespace);
 		map.map_layer(&layer_surface).unwrap();
 		self.set_input_focus(FocusTarget::LayerSurface(layer_surface));
 		drop(map);
-		for workspace in self.workspaces.iter() {
+		for workspace in self.workspaces().iter() {
 			refresh_geometry(workspace);
 		}
 	}
 
 	fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-		if let Some((mut map, layer)) = self.workspaces.outputs().find_map(|o| {
+		if let Some((mut map, layer)) = self.workspaces().outputs().find_map(|o| {
 			let map = layer_map_for_output(o);
 			let layer = map.layers().find(|&layer| layer.layer_surface() == &surface).cloned();
 			layer.map(|layer| (map, layer))
@@ -227,7 +227,7 @@ impl WlrLayerShellHandler for Compositor {
 			map.unmap_layer(&layer);
 		}
 		self.set_input_focus_auto();
-		for workspace in self.workspaces.iter() {
+		for workspace in self.workspaces().iter() {
 			refresh_geometry(workspace);
 		}
 	}

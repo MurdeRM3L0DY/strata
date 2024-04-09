@@ -2633,7 +2633,7 @@ pub struct KeyPattern {
 
 impl Compositor {
 	pub fn set_input_focus(&mut self, target: FocusTarget) {
-		let keyboard = self.seat.get_keyboard().unwrap();
+		let keyboard = self.seat().get_keyboard().unwrap();
 		let serial = SERIAL_COUNTER.next_serial();
 		keyboard.set_focus(self, Some(target), serial);
 	}
@@ -2645,24 +2645,25 @@ impl Compositor {
 		}
 	}
 
-	pub fn pointer_motion<I: InputBackend>(
-		&mut self,
-		event: I::PointerMotionEvent,
-	) -> anyhow::Result<()> {
+	pub fn pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) -> anyhow::Result<()> {
 		let serial = SERIAL_COUNTER.next_serial();
 		let delta = (event.delta_x(), event.delta_y()).into();
 
 		self.set_input_focus_auto();
 
-		if let Some(ptr) = self.seat.get_pointer() {
-			let location = self.workspaces.current().clamp_coords(ptr.current_location() + delta);
+		if let Some(ptr) = self.seat().get_pointer() {
+			let location = self.workspaces().current().clamp_coords(ptr.current_location() + delta);
 
 			let under = self.surface_under();
 
 			ptr.motion(
 				self,
 				under.clone(),
-				&MotionEvent { location, serial, time: event.time_msec() },
+				&MotionEvent {
+					location,
+					serial,
+					time: event.time_msec(),
+				},
 			);
 
 			ptr.relative_motion(
@@ -2685,45 +2686,53 @@ impl Compositor {
 	) -> anyhow::Result<()> {
 		let serial = SERIAL_COUNTER.next_serial();
 
-		let curr_workspace = self.workspaces.current();
+		let curr_workspace = self.workspaces().current();
 		let output = curr_workspace.outputs().next().unwrap();
 		let output_geo = curr_workspace.output_geometry(output).unwrap();
 		let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
 
-		let location = self.workspaces.current().clamp_coords(pos);
+		let location = self.workspaces().current().clamp_coords(pos);
 
 		self.set_input_focus_auto();
 
 		let under = self.surface_under();
-		if let Some(ptr) = self.seat.get_pointer() {
-			ptr.motion(self, under, &MotionEvent { location, serial, time: event.time_msec() });
-		}
-
-		Ok(())
-	}
-	pub fn pointer_button<I: InputBackend>(
-		&mut self,
-		event: I::PointerButtonEvent,
-	) -> anyhow::Result<()> {
-		let serial = SERIAL_COUNTER.next_serial();
-
-		let button = event.button_code();
-		let button_state = event.state();
-		self.set_input_focus_auto();
-		if let Some(ptr) = self.seat.get_pointer() {
-			ptr.button(
+		if let Some(ptr) = self.seat().get_pointer() {
+			ptr.motion(
 				self,
-				&ButtonEvent { button, state: button_state, serial, time: event.time_msec() },
+				under,
+				&MotionEvent {
+					location,
+					serial,
+					time: event.time_msec(),
+				},
 			);
 		}
 
 		Ok(())
 	}
 
-	pub fn pointer_axis<I: InputBackend>(
-		&mut self,
-		event: I::PointerAxisEvent,
-	) -> anyhow::Result<()> {
+	pub fn pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) -> anyhow::Result<()> {
+		let serial = SERIAL_COUNTER.next_serial();
+
+		let button = event.button_code();
+		let button_state = event.state();
+		self.set_input_focus_auto();
+		if let Some(ptr) = self.seat().get_pointer() {
+			ptr.button(
+				self,
+				&ButtonEvent {
+					button,
+					state: button_state,
+					serial,
+					time: event.time_msec(),
+				},
+			);
+		}
+
+		Ok(())
+	}
+
+	pub fn pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) -> anyhow::Result<()> {
 		let horizontal_amount = event
 			.amount(Axis::Horizontal)
 			.unwrap_or_else(|| event.amount(Axis::Horizontal).unwrap_or(0.0) * 3.0);
@@ -2743,7 +2752,7 @@ impl Compositor {
 			frame = frame.stop(Axis::Vertical);
 		}
 
-		if let Some(ptr) = self.seat.get_pointer() {
+		if let Some(ptr) = self.seat().get_pointer() {
 			ptr.axis(self, frame);
 		}
 

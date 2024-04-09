@@ -77,37 +77,50 @@ impl Strata {
 		});
 
 		if let PumpStatus::Exit(_) = res {
-			self.comp.borrow().loop_signal.stop();
+			self.comp.loop_signal().stop();
 		} else {
 			self.winit_update();
 		}
 	}
 
 	fn winit_update(&mut self) {
-		let comp = &mut *self.comp.borrow_mut();
+		let render_elements = self
+			.comp
+			.workspaces()
+			.current()
+			.render_elements(self.comp.backend().winit().backend.renderer());
 
-		comp.winit_render_elements();
+		self.comp
+			.backend()
+			.winit()
+			.damage_tracker
+			.render_output(
+				self.comp.backend().winit().backend.renderer(),
+				0,
+				&render_elements,
+				[0.1, 0.1, 0.1, 1.0],
+			)
+			.unwrap();
 
-		comp.set_input_focus_auto();
+		self.comp.set_input_focus_auto();
 
 		// damage tracking
-		let size = comp.backend.winit().backend.window_size();
+		let size = self.comp.backend().winit().backend.window_size();
 		let damage = Rectangle::from_loc_and_size((0, 0), size);
-		comp.backend.winit_mut().backend.bind().unwrap();
-		comp.backend.winit_mut().backend.submit(Some(&[damage])).unwrap();
+		self.comp.backend().winit().backend.bind().unwrap();
+		self.comp.backend().winit().backend.submit(Some(&[damage])).unwrap();
 
 		// sync and cleanups
-		let output = comp.workspaces.current().outputs().next().unwrap();
-		comp.workspaces.current().windows().for_each(|window| {
-			window.send_frame(output, comp.clock.elapsed(), Some(Duration::ZERO), |_, _| {
+		let output = self.comp.workspaces().current().outputs().next().unwrap();
+		self.comp.workspaces().current().windows().for_each(|window| {
+			window.send_frame(output, self.comp.clock().elapsed(), Some(Duration::ZERO), |_, _| {
 				Some(output.clone())
 			});
 
 			window.refresh();
 		});
-		comp.display_handle.flush_clients().unwrap();
-		comp.popup_manager.cleanup();
-		BorderShader::cleanup(comp.backend.winit_mut().backend.renderer());
+		self.comp.popup_manager().cleanup();
+		BorderShader::cleanup(self.comp.backend().winit().backend.renderer());
 	}
 }
 
@@ -127,18 +140,18 @@ impl WinitData {
 				model: "Winit".into(),
 			},
 		);
-		let _global = output.create_global::<Compositor>(&comp.display_handle);
+		let _global = output.create_global::<Compositor>(comp.display_handle());
 		output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
 		output.set_preferred(mode);
 
 		let damage_tracker = OutputDamageTracker::from_output(&output);
 
 		BorderShader::init(backend.renderer());
-		for workspace in comp.workspaces.iter() {
+		for workspace in comp.workspaces().iter() {
 			workspace.add_output(output.clone());
 		}
 
-		comp.loop_handle
+		comp.loop_handle()
 			.insert_source(Timer::immediate(), move |_, _, data| {
 				data.winit_dispatch(&mut winit_loop, &output);
 				TimeoutAction::ToDuration(Duration::from_millis(16))

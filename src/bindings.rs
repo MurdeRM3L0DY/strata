@@ -1,11 +1,7 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{
-	cell::RefCell,
-	process::Command,
-	rc::Rc,
-};
+use std::process::Command;
 
 use piccolo::{
 	self as lua,
@@ -15,13 +11,13 @@ use piccolo::{
 use crate::state::Compositor;
 
 trait CtxExt<'gc> {
-	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<Compositor>>>;
+	fn comp(self) -> anyhow::Result<&'gc Compositor>;
 }
 
 impl<'gc> CtxExt<'gc> for lua::Context<'gc> {
-	fn comp(self) -> anyhow::Result<&'gc Rc<RefCell<Compositor>>> {
+	fn comp(self) -> anyhow::Result<&'gc Compositor> {
 		let comp = lua::UserData::from_value(self, self.globals().get(self, "strata"))?;
-		Ok(comp.downcast_static::<Rc<RefCell<Compositor>>>()?)
+		Ok(comp.downcast_static::<Compositor>()?)
 	}
 }
 
@@ -45,7 +41,7 @@ pub fn metatable<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Table<'gc>>
 		"quit",
 		lua::Callback::from_fn(&ctx, |ctx, _, _| {
 			let comp = ctx.comp()?;
-			comp.borrow().quit();
+			comp.quit();
 
 			Ok(lua::CallbackReturn::Return)
 		}),
