@@ -2,38 +2,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod key;
-mod modflags;
+mod modifier;
 
 use piccolo::{
 	self as lua,
+	IntoValue,
 };
 
 use crate::{
-	bindings::CtxExt,
+	bindings::ContextExt,
 	handlers::input::{
 		Key,
 		KeyPattern,
-		ModFlags,
+		Modifier,
 	},
 };
 
-pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 	let input = lua::Table::new(&ctx);
-	input.set(ctx, "Key", key::module(ctx)?)?;
-	input.set(ctx, "Mod", modflags::module(ctx)?)?;
+
+	input.set_field(ctx, "Key", key::module(ctx, comp)?);
+	input.set_field(ctx, "Mod", modifier::module(ctx, comp)?);
+
 	input.set(
 		ctx,
 		"keybind",
-		lua::Callback::from_fn(&ctx, |ctx, _, mut stack| {
-			let comp = ctx.comp()?;
-			let (mods, key, cb) = stack.consume::<(ModFlags, Key, lua::Function)>(ctx)?;
+		lua::Callback::from_fn_with(&ctx, comp, |comp, ctx, _, mut stack| {
+			let comp = ctx.comp(comp)?;
+			let (mods, key, cb) = stack.consume::<(Modifier, Key, lua::Function)>(ctx)?;
 
 			let keypat = KeyPattern {
-				mods,
+				modifier: mods,
 				key,
 			};
 
-			comp.config().keybinds.insert(keypat, ctx.stash(cb));
+			comp.with_mut(|comp| {
+				comp.config.keybinds.insert(keypat, ctx.stash(cb));
+			});
 
 			println!("{:#?}: {:#?}", mods, key);
 
@@ -41,5 +46,5 @@ pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 		}),
 	)?;
 
-	Ok(lua::Value::Table(input))
+	Ok(input.into_value(ctx))
 }

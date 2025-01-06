@@ -36,7 +36,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Mods {
-	pub flags: ModFlags,
+	pub flags: Modifier,
 	pub state: ModifiersState,
 }
 
@@ -90,7 +90,7 @@ pub struct Mods {
 // const KEY_ISO_Last_Group_Lock = 0xfe0f;
 bitflags! {
 	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-	pub struct ModFlags: u8 {
+	pub struct Modifier: u8 {
 		const Shift_L = 1;
 		const Shift_R = 1 << 1;
 		const Control_L = 1 << 1 + 1;
@@ -2627,7 +2627,7 @@ enum_table! {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyPattern {
-	pub mods: ModFlags,
+	pub modifier: Modifier,
 	pub key: Key,
 }
 

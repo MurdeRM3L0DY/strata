@@ -14,6 +14,11 @@ use std::{
 use piccolo::{
 	self as lua,
 };
+use piccolo_util::freeze::{
+	Freeze,
+	FreezeGuard,
+	Frozen,
+};
 use smithay::{
 	backend::input::{
 		Event,
@@ -96,7 +101,7 @@ use crate::{
 	bindings,
 	handlers::input::{
 		KeyPattern,
-		ModFlags,
+		Modifier,
 		Mods,
 	},
 	workspaces::{
@@ -105,55 +110,81 @@ use crate::{
 	},
 };
 
+pub type FrozenCompositor = Frozen<Freeze![&'freeze mut Compositor]>;
+
+pub struct Runtime {
+	lua: lua::Lua,
+	comp: FrozenCompositor,
+	ex: lua::StashedExecutor,
+}
+
+impl Runtime {
+	fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
+	where
+		F: FnOnce((&mut lua::Lua, &lua::StashedExecutor), &FrozenCompositor) -> R,
+	{
+		FreezeGuard::new(&self.comp, comp).scope(|| f((&mut self.lua, &self.ex), &self.comp))
+	}
+}
+
 pub struct Strata {
 	pub display: Display<Compositor>,
-	pub lua: lua::Lua,
+	pub rt: Runtime,
 	pub comp: Compositor,
 }
 
 impl Strata {
-	pub fn new(comp: Compositor, display: Display<Compositor>) -> Self {
+	pub fn new(mut comp: Compositor, display: Display<Compositor>) -> anyhow::Result<Self> {
 		let mut lua = lua::Lua::full();
+		let ex = lua.enter(|ctx| ctx.stash(lua::Executor::new(ctx)));
+		let mut rt = Runtime {
+			lua,
+			comp: FrozenCompositor::new(),
+			ex,
+		};
 
-		std::env::set_var("WAYLAND_DISPLAY", comp.socket_name());
+		std::env::set_var("WAYLAND_DISPLAY", &comp.socket_name);
 
-		let ex = lua
-			.try_enter(|ctx| {
-				let strata = lua::UserData::new_static(&ctx, comp.clone());
-				strata.set_metatable(&ctx, Some(bindings::metatable(ctx)?));
-				ctx.globals().set(ctx, "strata", strata)?;
+		rt.scope(&mut comp, |(lua, ex), comp| {
+			lua.try_enter(|ctx| {
+				ctx.globals().set(ctx, "strata", bindings::create(ctx, comp)?)?;
 
 				let main = lua::Closure::load(
 					ctx,
 					None,
-					r#"
+					&br#"
 					local Key = strata.input.Key
 					local Mod = strata.input.Mod
 
 					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
+						print("spawning kitty")
 						strata.spawn('kitty')
 					end)
 
 					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
+						print("quitting strata")
 						strata.quit()
 					end)
-					"#
-					.as_bytes(),
+					"#[..],
 				)?;
 
-				Ok(ctx.stash(lua::Executor::start(ctx, main.into(), ())))
-			})
-			.unwrap();
+				ctx.fetch(ex).restart(ctx, main.into(), ());
 
-		if let Err(e) = lua.execute::<()>(&ex) {
-			println!("{:#?}", e);
-		}
+				Ok(())
+			})?;
 
-		Strata {
-			lua,
+			if let Err(e) = lua.execute::<()>(ex) {
+				println!("{:#?}", e);
+			}
+
+			anyhow::Ok(())
+		})?;
+
+		Ok(Strata {
+			rt,
 			comp,
 			display,
-		}
+		})
 	}
 
 	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
@@ -276,6 +307,17 @@ impl Strata {
 					KeyState::Released => FilterResult::Forward,
 				}
 			},
+		) {
+			self.rt.scope(&mut self.comp, |(lua, ex), comp| {
+				comp.with(|comp| {
+					let f = comp.config.keybinds.get(&k).unwrap();
+					lua.enter(|ctx| {
+						ctx.fetch(ex).restart(ctx, ctx.fetch(f), ());
+					});
+				});
+				lua.execute::<()>(ex)?;
+
+				anyhow::Ok(())
 			})?;
 		};
 
@@ -480,25 +522,25 @@ impl Compositor {
 
 		let modflag = match keysym {
 			// equivalent to "Control_* + Shift_* + Alt_*" (on my keyboard *smile*)
-			Keysym::Meta_L => ModFlags::Alt_L,
-			Keysym::Meta_R => ModFlags::Alt_R,
+			Keysym::Meta_L => Modifier::Alt_L,
+			Keysym::Meta_R => Modifier::Alt_R,
 
-			Keysym::Shift_L => ModFlags::Shift_L,
-			Keysym::Shift_R => ModFlags::Shift_R,
+			Keysym::Shift_L => Modifier::Shift_L,
+			Keysym::Shift_R => Modifier::Shift_R,
 
-			Keysym::Control_L => ModFlags::Control_L,
-			Keysym::Control_R => ModFlags::Control_R,
+			Keysym::Control_L => Modifier::Control_L,
+			Keysym::Control_R => Modifier::Control_R,
 
-			Keysym::Alt_L => ModFlags::Alt_L,
-			Keysym::Alt_R => ModFlags::Alt_R,
+			Keysym::Alt_L => Modifier::Alt_L,
+			Keysym::Alt_R => Modifier::Alt_R,
 
-			Keysym::Super_L => ModFlags::Super_L,
-			Keysym::Super_R => ModFlags::Super_R,
+			Keysym::Super_L => Modifier::Super_L,
+			Keysym::Super_R => Modifier::Super_R,
 
-			Keysym::ISO_Level3_Shift => ModFlags::ISO_Level3_Shift,
-			Keysym::ISO_Level5_Shift => ModFlags::ISO_Level5_Shift,
+			Keysym::ISO_Level3_Shift => Modifier::ISO_Level3_Shift,
+			Keysym::ISO_Level5_Shift => Modifier::ISO_Level5_Shift,
 
-			_ => ModFlags::empty(),
+			_ => Modifier::empty(),
 		};
 
 		match event.state() {
@@ -536,6 +578,7 @@ pub trait WithState {
 	fn with_state<F, T>(&self, f: F)
 	where
 		F: FnOnce(&Self::State) -> T;
+
 	fn with_state_mut<F, T>(&self, f: F)
 	where
 		F: FnOnce(&mut Self::State) -> T;

@@ -7,9 +7,9 @@ use piccolo::{
 	IntoValue,
 };
 
-use crate::handlers::input::ModFlags;
+use crate::handlers::input::Modifier;
 
-impl<'gc> FromValue<'gc> for ModFlags {
+impl<'gc> FromValue<'gc> for Modifier {
 	fn from_value(_: lua::Context<'gc>, value: lua::Value<'gc>) -> Result<Self, lua::TypeError> {
 		match value {
 			lua::Value::Table(mods) => {
@@ -20,8 +20,8 @@ impl<'gc> FromValue<'gc> for ModFlags {
 						lua::Value::UserData(ud) => {
 							let bits = *ud.downcast_static::<Self>().map_err(|_| {
 								lua::TypeError {
-									expected: "Mod",
-									found: value.type_name(),
+									expected: "Mod (userdata)",
+									found: "Unknown (userdata)",
 								}
 							})?;
 
@@ -29,14 +29,14 @@ impl<'gc> FromValue<'gc> for ModFlags {
 						}
 						_ => {
 							return Err(lua::TypeError {
-								expected: "Mod",
+								expected: "Mod (userdata)",
 								found: v.type_name(),
 							});
 						}
 					};
 				}
 
-				return Ok(r);
+				Ok(r)
 			}
 			_ => {
 				Err(lua::TypeError {
@@ -48,8 +48,8 @@ impl<'gc> FromValue<'gc> for ModFlags {
 	}
 }
 
-pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
-	let modf = lua::Table::new(&ctx);
+pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+	let mods = lua::Table::new(&ctx);
 	let meta = lua::Table::new(&ctx);
 
 	meta.set(
@@ -60,7 +60,7 @@ pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 
 			let k = stack.consume::<lua::String>(ctx)?;
 			let k = k.to_str()?;
-			let bits = ModFlags::from_name(k).ok_or_else(|| anyhow::anyhow!("invalid Mod key: {}", k))?;
+			let bits = Modifier::from_name(k).ok_or_else(|| anyhow::anyhow!("invalid Mod key: {}", k))?;
 			let bits = lua::UserData::new_static(&ctx, bits);
 
 			let bits_meta = lua::Table::new(&ctx);
@@ -69,7 +69,7 @@ pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 				lua::MetaMethod::ToString,
 				lua::Callback::from_fn(&ctx, |ctx, _, mut stack| {
 					let this = stack.consume::<lua::UserData>(ctx)?;
-					let this = this.downcast_static::<ModFlags>()?;
+					let this = this.downcast_static::<Modifier>()?;
 
 					stack.push_front(format!("{:#?}", this).into_value(ctx));
 					Ok(lua::CallbackReturn::Return)
@@ -83,7 +83,7 @@ pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 		}),
 	)?;
 
-	modf.set_metatable(&ctx, Some(meta));
+	mods.set_metatable(&ctx, Some(meta));
 
-	Ok(lua::Value::Table(modf))
+	Ok(mods.into_value(ctx))
 }

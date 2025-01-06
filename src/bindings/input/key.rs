@@ -3,16 +3,17 @@
 
 use piccolo::{
 	self as lua,
-	FromValue
+	FromValue,
+	IntoValue,
 };
 
 use crate::handlers::input::Key;
 
-pub fn module<'gc>(ctx: lua::Context<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 	let meta = lua::Table::from_value(ctx, Key::metatable(ctx)?)?;
 
 	let keys = lua::Table::new(&ctx);
 	keys.set_metatable(&ctx, Some(meta));
 
-	Ok(lua::Value::Table(keys))
+	Ok(keys.into_value(ctx))
 }
