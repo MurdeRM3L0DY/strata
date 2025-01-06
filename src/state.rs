@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-	collections::HashMap,
 	ffi::OsString,
 	os::fd::AsRawFd,
 	process::Command,
-	rc::Rc,
 	sync::Arc,
 	time::Instant,
 };
@@ -99,9 +97,14 @@ use smithay::{
 use crate::{
 	backends::Backend,
 	bindings,
+	config::{
+		StrataConfig,
+		StrataInputConfig,
+		StrataXkbConfig,
+	},
 	handlers::input::{
 		KeyPattern,
-		Modifier,
+		Modifiers,
 		Mods,
 	},
 	workspaces::{
@@ -153,15 +156,30 @@ impl Strata {
 					ctx,
 					None,
 					&br#"
-					local Key = strata.input.Key
-					local Mod = strata.input.Mod
+					local ks = strata.input.Keys
+					local ms = strata.input.Modifiers
 
-					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Return, function()
+                    strata.input.setup {
+						repeat_info = {
+						    rate = 30,
+							delay = 150,
+						},
+
+						xkbconfig = {
+							layout = "it",
+							rules = "",
+							model = "",
+							options = "caps:swapescape",
+							variant = "",
+						},
+                    }
+
+					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Return, function()
 						print("spawning kitty")
 						strata.spawn('kitty')
 					end)
 
-					strata.input.keybind({ Mod.Control_L, Mod.Alt_L }, Key.Escape, function()
+					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Escape, function()
 						print("quitting strata")
 						strata.quit()
 					end)
@@ -289,16 +307,16 @@ impl Strata {
 			|comp, mods, keysym_h| {
 				comp.handle_mods::<I>(mods, keysym_h.modified_sym(), &event);
 
-				println!("{:#?}", comp.mods);
-				println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
+				// println!("{:#?}", comp.mods);
+				// println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
 				match event.state() {
 					KeyState::Pressed => {
 						let k = KeyPattern {
-							modifier: comp.mods.flags,
+							modifiers: comp.mods.flags,
 							key: keysym_h.modified_sym().into(),
 						};
 
-						if comp.config.keybinds.contains_key(&k) {
+						if comp.config.input_config.global_keybinds.contains_key(&k) {
 							FilterResult::Intercept(k)
 						} else {
 							FilterResult::Forward
@@ -310,12 +328,14 @@ impl Strata {
 		) {
 			self.rt.scope(&mut self.comp, |(lua, ex), comp| {
 				comp.with(|comp| {
-					let f = comp.config.keybinds.get(&k).unwrap();
+					let f = &comp.config.input_config.global_keybinds[&k];
 					lua.enter(|ctx| {
 						ctx.fetch(ex).restart(ctx, ctx.fetch(f), ());
 					});
 				});
-				lua.execute::<()>(ex)?;
+				if let Err(e) = lua.execute::<()>(ex) {
+					println!("{:#?}", e);
+				}
 
 				anyhow::Ok(())
 			})?;
@@ -384,17 +404,28 @@ impl Compositor {
 			)
 			.unwrap();
 
+		let config = StrataConfig::default();
+
+		let StrataInputConfig {
+			repeat_info,
+			xkbconfig,
+			..
+		} = &config.input_config;
+		let xkbconfig = xkbconfig.as_ref().expect("StrataXkbConfig should have a default set");
+
 		let mut seat_state = SeatState::new();
-		let mut seat = seat_state.new_wl_seat(&display_handle, "Strata");
+		let mut seat = seat_state.new_wl_seat(&display_handle, "strata-seat-0");
 		let keyboard = seat
 			.add_keyboard(
 				XkbConfig {
-					layout: "it",
-					options: Some("caps:swapescape".to_string()),
-					..Default::default()
+					layout: &xkbconfig.layout,
+					options: xkbconfig.options.clone(),
+					rules: &xkbconfig.rules,
+					model: &xkbconfig.model,
+					variant: &xkbconfig.variant,
 				},
-				160,
-				40,
+				repeat_info.delay,
+				repeat_info.rate,
 			)
 			.expect("Couldn't parse XKB config");
 		seat.add_pointer();
@@ -435,15 +466,33 @@ impl Compositor {
 			socket_name,
 			workspaces,
 			mods: Mods {
-				flags: Modifier::empty(),
+				flags: Modifiers::empty(),
 				state: mods_state,
 			},
-			config: StrataConfig {
-				keybinds: HashMap::new(),
-			},
+			config,
 		};
 
 		Ok(comp)
+	}
+
+	pub fn update_xkbconfig(&mut self, cfg: &StrataXkbConfig) -> anyhow::Result<()> {
+		let keyboard = self
+			.seat
+			.get_keyboard()
+			.ok_or_else(|| anyhow::anyhow!("Unable to get keyboard handle"))?;
+		keyboard.set_xkb_config(
+			self,
+			XkbConfig {
+				layout: &cfg.layout,
+				rules: &cfg.rules,
+				model: &cfg.model,
+				options: cfg.options.clone(),
+				variant: &cfg.variant,
+			},
+		)?;
+		self.mods.state = keyboard.modifier_state();
+
+		Ok(())
 	}
 
 	pub fn surface_under(&self) -> Option<(FocusTarget, Point<i32, Logical>)> {
@@ -522,25 +571,28 @@ impl Compositor {
 
 		let modflag = match keysym {
 			// equivalent to "Control_* + Shift_* + Alt_*" (on my keyboard *smile*)
-			Keysym::Meta_L => Modifier::Alt_L,
-			Keysym::Meta_R => Modifier::Alt_R,
+			Keysym::Meta_L => Modifiers::Alt_L,
+			Keysym::Meta_R => Modifiers::Alt_R,
 
-			Keysym::Shift_L => Modifier::Shift_L,
-			Keysym::Shift_R => Modifier::Shift_R,
+			Keysym::Shift_L => Modifiers::Shift_L,
+			Keysym::Shift_R => Modifiers::Shift_R,
 
-			Keysym::Control_L => Modifier::Control_L,
-			Keysym::Control_R => Modifier::Control_R,
+			Keysym::Control_L => Modifiers::Control_L,
+			Keysym::Control_R => Modifiers::Control_R,
 
-			Keysym::Alt_L => Modifier::Alt_L,
-			Keysym::Alt_R => Modifier::Alt_R,
+			Keysym::Alt_L => Modifiers::Alt_L,
+			Keysym::Alt_R => Modifiers::Alt_R,
 
-			Keysym::Super_L => Modifier::Super_L,
-			Keysym::Super_R => Modifier::Super_R,
+			Keysym::Super_L => Modifiers::Super_L,
+			Keysym::Super_R => Modifiers::Super_R,
 
-			Keysym::ISO_Level3_Shift => Modifier::ISO_Level3_Shift,
-			Keysym::ISO_Level5_Shift => Modifier::ISO_Level5_Shift,
+			Keysym::ISO_Level3_Shift => Modifiers::ISO_Level3_Shift,
+			Keysym::ISO_Level5_Shift => Modifiers::ISO_Level5_Shift,
 
-			_ => Modifier::empty(),
+			Keysym::Hyper_L => Modifiers::Hyper_L,
+			Keysym::Hyper_R => Modifiers::Hyper_R,
+
+			_ => Modifiers::empty(),
 		};
 
 		match event.state() {
@@ -582,10 +634,6 @@ pub trait WithState {
 	fn with_state_mut<F, T>(&self, f: F)
 	where
 		F: FnOnce(&mut Self::State) -> T;
-}
-
-pub struct StrataConfig {
-	pub keybinds: HashMap<KeyPattern, lua::StashedFunction>,
 }
 
 #[derive(Default)]

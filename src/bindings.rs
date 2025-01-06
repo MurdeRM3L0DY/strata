@@ -5,6 +5,7 @@ use std::process::Command;
 
 use piccolo::{
 	self as lua,
+	FromValue as _,
 };
 
 use crate::state::FrozenCompositor;
@@ -56,4 +57,10 @@ pub fn create<'gc>(ctx: lua::Context<'gc>, comp: &FrozenCompositor) -> anyhow::R
 	comp.set_metatable(&ctx, Some(meta));
 
 	Ok(comp)
+}
+
+pub fn get_str_from_value<'gc>(ctx: lua::Context<'gc>, value: lua::Value<'gc>) -> anyhow::Result<&'gc str> {
+	let r = lua::String::from_value(ctx, value)?;
+
+	Ok(r.to_str()?)
 }
