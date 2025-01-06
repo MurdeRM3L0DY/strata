@@ -37,7 +37,7 @@ impl Backend {
 
 	pub fn from_str(backend: &str, comp: &mut Compositor) -> anyhow::Result<Self> {
 		Ok(match backend {
-			"winit" => WinitData::new(comp)?,
+			"winit" => Self::Winit(WinitData::new(comp)?),
 			"udev" => {
 				todo!()
 			}

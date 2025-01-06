@@ -8,13 +8,7 @@ description = "A cutting-edge, robust and sleek Wayland compositor with batterie
 readme = "README.md"
 homepage = "https://github.com/stratawm/strata"
 repository = "https://github.com/stratawm/strata"
-keywords = [
-    "smithay",
-    "compositor",
-    "wayland",
-    "linux",
-    "window-manager",
-]
+keywords = ["smithay", "compositor", "wayland", "linux", "window-manager"]
 
 [profile.release]
 strip = true
@@ -54,19 +48,19 @@ git = "https://github.com/stratawm/smithay"
 version = "0.3.0"
 rev = "f1e7fc1"
 features = [
-    "wayland_frontend",
-    "renderer_multi",
-    "renderer_glow",
-    "backend_drm",
-    "backend_gbm",
-    "backend_egl",
-    "backend_libinput",
-    "backend_session_libseat",
-    "backend_udev",
-    "backend_winit",
-    "backend_vulkan",
-    "backend_x11",
-    "desktop",
-    "use_system_lib",
-    "xwayland",
+	"wayland_frontend",
+	"renderer_multi",
+	"renderer_glow",
+	"backend_drm",
+	"backend_gbm",
+	"backend_egl",
+	"backend_libinput",
+	"backend_session_libseat",
+	"backend_udev",
+	"backend_winit",
+	"backend_vulkan",
+	"backend_x11",
+	"desktop",
+	"use_system_lib",
+	"xwayland",
 ]

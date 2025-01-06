@@ -9,6 +9,7 @@ use log::info;
 use smithay::reexports::{
 	calloop::EventLoop,
 	wayland_server::Display,
+	winit::keyboard::ModifiersState,
 };
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -66,11 +67,11 @@ async fn main() -> anyhow::Result<()> {
 	let mut event_loop = EventLoop::try_new()?;
 	let mut display = Display::new()?;
 	let mut comp = Compositor::new(&event_loop, &mut display)?;
-	*comp.backend() = Backend::from_str(&args.backend, &mut comp)?;
+	comp.backend = Backend::from_str(&args.backend, &mut comp)?;
 
-	let mut state = Strata::new(comp, display);
+	let mut state = Strata::new(comp, display)?;
 	event_loop.run(None, &mut state, move |state| {
-		state.display.handle().flush_clients().unwrap();
+		state.display.flush_clients().unwrap();
 	})?;
 
 	info!("Quitting Strata WM");

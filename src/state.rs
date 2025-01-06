@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-	cell::UnsafeCell,
 	collections::HashMap,
 	ffi::OsString,
 	os::fd::AsRawFd,
@@ -245,8 +244,12 @@ impl Strata {
 		let serial = SERIAL_COUNTER.next_serial();
 		let time = Event::time_msec(&event);
 
-		let keyboard = self.comp.seat().get_keyboard().unwrap();
-		let k = keyboard.input(
+		let keyboard = self
+			.comp
+			.seat
+			.get_keyboard()
+			.ok_or_else(|| anyhow::anyhow!("no keyboard attached to seat"))?;
+		if let Some(k) = keyboard.input(
 			&mut self.comp,
 			event.key_code(),
 			event.state(),
@@ -255,79 +258,33 @@ impl Strata {
 			|comp, mods, keysym_h| {
 				comp.handle_mods::<I>(mods, keysym_h.modified_sym(), &event);
 
-				// println!("{:#?}", comp.mods);
-				// println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
+				println!("{:#?}", comp.mods);
+				println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
 				match event.state() {
 					KeyState::Pressed => {
 						let k = KeyPattern {
-							mods: comp.mods().flags,
+							modifier: comp.mods.flags,
 							key: keysym_h.modified_sym().into(),
 						};
 
-						if comp.config().keybinds.contains_key(&k) {
+						if comp.config.keybinds.contains_key(&k) {
 							FilterResult::Intercept(k)
 						} else {
 							FilterResult::Forward
 						}
 					}
-					KeyState::Released => {
-						return FilterResult::Forward;
-					}
+					KeyState::Released => FilterResult::Forward,
 				}
 			},
-		);
-
-		if let Some(k) = k {
-			let keybinds = &self.comp.config().keybinds;
-			let ex = self.lua.try_enter(|ctx| {
-				let f = ctx.fetch(keybinds.get(&k).unwrap());
-				Ok(ctx.stash(lua::Executor::start(ctx, f, ())))
 			})?;
-
-			let _ = self.lua.execute::<()>(&ex)?;
-		}
-
-		Ok(())
-	}
-
-	pub fn pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) -> anyhow::Result<()> {
-		self.comp.pointer_motion::<I>(event)?;
-
-		Ok(())
-	}
-
-	pub fn pointer_motion_absolute<I: InputBackend>(
-		&mut self,
-		event: I::PointerMotionAbsoluteEvent,
-	) -> anyhow::Result<()> {
-		self.comp.pointer_motion_absolute::<I>(event)?;
-
-		Ok(())
-	}
-
-	pub fn pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) -> anyhow::Result<()> {
-		self.comp.pointer_button::<I>(event)?;
-
-		Ok(())
-	}
-
-	pub fn pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) -> anyhow::Result<()> {
-		self.comp.pointer_axis::<I>(event)?;
+		};
 
 		Ok(())
 	}
 }
 
-pub struct Compositor(Rc<CompositorInner>);
-
-impl Clone for Compositor {
-	fn clone(&self) -> Self {
-		Self(self.0.clone())
-	}
-}
-
-pub struct CompositorInner {
-	pub backend: UnsafeCell<Backend>,
+pub struct Compositor {
+	pub backend: Backend,
 
 	pub display_handle: DisplayHandle,
 	pub loop_handle: LoopHandle<'static, Strata>,
@@ -335,22 +292,22 @@ pub struct CompositorInner {
 
 	pub clock: Instant,
 
-	pub compositor_state: UnsafeCell<CompositorState>,
-	pub xdg_shell_state: UnsafeCell<XdgShellState>,
-	pub xdg_decoration_state: UnsafeCell<XdgDecorationState>,
-	pub shm_state: UnsafeCell<ShmState>,
-	pub output_manager_state: UnsafeCell<OutputManagerState>,
-	pub data_device_state: UnsafeCell<DataDeviceState>,
-	pub primary_selection_state: UnsafeCell<PrimarySelectionState>,
-	pub seat_state: UnsafeCell<SeatState<Compositor>>,
-	pub layer_shell_state: UnsafeCell<WlrLayerShellState>,
-	pub popup_manager: UnsafeCell<PopupManager>,
-	pub space: UnsafeCell<Space<Window>>,
-	pub seat: UnsafeCell<Seat<Compositor>>,
+	pub compositor_state: CompositorState,
+	pub xdg_shell_state: XdgShellState,
+	pub xdg_decoration_state: XdgDecorationState,
+	pub shm_state: ShmState,
+	pub output_manager_state: OutputManagerState,
+	pub data_device_state: DataDeviceState,
+	pub primary_selection_state: PrimarySelectionState,
+	pub seat_state: SeatState<Compositor>,
+	pub layer_shell_state: WlrLayerShellState,
+	pub popup_manager: PopupManager,
+	pub space: Space<Window>,
+	pub seat: Seat<Compositor>,
 	pub socket_name: OsString,
-	pub workspaces: UnsafeCell<Workspaces>,
-	pub mods: UnsafeCell<Mods>,
-	pub config: UnsafeCell<StrataConfig>,
+	pub workspaces: Workspaces,
+	pub mods: Mods,
+	pub config: StrataConfig,
 }
 
 impl Compositor {
@@ -413,131 +370,47 @@ impl Compositor {
 		let primary_selection_state = PrimarySelectionState::new::<Compositor>(&display_handle);
 		let layer_shell_state = WlrLayerShellState::new::<Compositor>(&display_handle);
 
-		let comp = Compositor(Rc::new(CompositorInner {
-			backend: UnsafeCell::new(Backend::Unset),
+		let comp = Compositor {
+			backend: Backend::Unset,
 			display_handle,
 			loop_handle,
 			loop_signal: event_loop.get_signal(),
 
 			clock: Instant::now(),
 
-			compositor_state: UnsafeCell::new(compositor_state),
-			xdg_shell_state: UnsafeCell::new(xdg_shell_state),
-			xdg_decoration_state: UnsafeCell::new(xdg_decoration_state),
-			shm_state: UnsafeCell::new(shm_state),
-			output_manager_state: UnsafeCell::new(output_manager_state),
-			data_device_state: UnsafeCell::new(data_device_state),
-			primary_selection_state: UnsafeCell::new(primary_selection_state),
-			seat_state: UnsafeCell::new(seat_state),
-			layer_shell_state: UnsafeCell::new(layer_shell_state),
-			popup_manager: UnsafeCell::new(PopupManager::default()),
-			space: UnsafeCell::new(Space::<Window>::default()),
-			seat: UnsafeCell::new(seat),
+			compositor_state,
+			xdg_shell_state,
+			xdg_decoration_state,
+			shm_state,
+			output_manager_state,
+			data_device_state,
+			primary_selection_state,
+			seat_state,
+			layer_shell_state,
+			popup_manager: PopupManager::default(),
+			space: Space::<Window>::default(),
+			seat,
 			socket_name,
-			workspaces: UnsafeCell::new(workspaces),
-			mods: UnsafeCell::new(Mods {
-				flags: ModFlags::empty(),
+			workspaces,
+			mods: Mods {
+				flags: Modifier::empty(),
 				state: mods_state,
-			}),
-			config: UnsafeCell::new(StrataConfig {
+			},
+			config: StrataConfig {
 				keybinds: HashMap::new(),
-			}),
-		}));
+			},
+		};
 
 		Ok(comp)
 	}
 
-	pub fn backend(&self) -> &mut Backend {
-		unsafe { &mut *self.0.backend.get() }
-	}
-
-	pub fn display_handle(&self) -> &DisplayHandle {
-		&self.0.display_handle
-	}
-
-	pub fn loop_handle(&self) -> &LoopHandle<'static, Strata> {
-		&self.0.loop_handle
-	}
-
-	pub fn loop_signal(&self) -> &LoopSignal {
-		&self.0.loop_signal
-	}
-
-	pub fn socket_name(&self) -> &OsString {
-		&self.0.socket_name
-	}
-
-	pub fn _compositor_state(&self) -> &mut CompositorState {
-		unsafe { &mut *self.0.compositor_state.get() }
-	}
-
-	pub fn _xdg_shell_state(&self) -> &mut XdgShellState {
-		unsafe { &mut *self.0.xdg_shell_state.get() }
-	}
-
-	pub fn _xdg_decoration_state(&self) -> &mut XdgDecorationState {
-		unsafe { &mut *self.0.xdg_decoration_state.get() }
-	}
-
-	pub fn _shm_state(&self) -> &mut ShmState {
-		unsafe { &mut *self.0.shm_state.get() }
-	}
-
-	pub fn _output_manager_state(&self) -> &mut OutputManagerState {
-		unsafe { &mut *self.0.output_manager_state.get() }
-	}
-
-	pub fn _data_device_state(&self) -> &mut DataDeviceState {
-		unsafe { &mut *self.0.data_device_state.get() }
-	}
-
-	pub fn _primary_selection_state(&self) -> &mut PrimarySelectionState {
-		unsafe { &mut *self.0.primary_selection_state.get() }
-	}
-
-	pub fn _seat_state(&self) -> &mut SeatState<Self> {
-		unsafe { &mut *self.0.seat_state.get() }
-	}
-
-	pub fn _layer_shell_state(&self) -> &mut WlrLayerShellState {
-		unsafe { &mut *self.0.layer_shell_state.get() }
-	}
-
-	pub fn popup_manager(&self) -> &mut PopupManager {
-		unsafe { &mut *self.0.popup_manager.get() }
-	}
-
-	pub fn space(&self) -> &mut Space<Window> {
-		unsafe { &mut *self.0.space.get() }
-	}
-
-	pub fn seat(&self) -> &mut Seat<Compositor> {
-		unsafe { &mut *self.0.seat.get() }
-	}
-
-	pub fn workspaces(&self) -> &mut Workspaces {
-		unsafe { &mut *self.0.workspaces.get() }
-	}
-
-	pub fn mods(&self) -> &mut Mods {
-		unsafe { &mut *self.0.mods.get() }
-	}
-
-	pub fn config(&self) -> &mut StrataConfig {
-		unsafe { &mut *self.0.config.get() }
-	}
-
-	pub fn clock(&self) -> &Instant {
-		&self.0.clock
-	}
-
 	pub fn surface_under(&self) -> Option<(FocusTarget, Point<i32, Logical>)> {
-		let pos = self.seat().get_pointer().unwrap().current_location();
-		let output = self.workspaces().current().outputs().find(|o| {
-			let geometry = self.workspaces().current().output_geometry(o).unwrap();
+		let pos = self.seat.get_pointer().unwrap().current_location();
+		let output = self.workspaces.current().outputs().find(|o| {
+			let geometry = self.workspaces.current().output_geometry(o).unwrap();
 			geometry.contains(pos.to_i32_round())
 		})?;
-		let output_geo = self.workspaces().current().output_geometry(output).unwrap();
+		let output_geo = self.workspaces.current().output_geometry(output).unwrap();
 		let layers = layer_map_for_output(output);
 
 		let mut under = None;
@@ -547,7 +420,7 @@ impl Compositor {
 		{
 			let layer_loc = layers.layer_geometry(layer).unwrap().loc;
 			under = Some((layer.clone().into(), output_geo.loc + layer_loc))
-		} else if let Some((window, location)) = self.workspaces().current().window_under(pos) {
+		} else if let Some((window, location)) = self.workspaces.current().window_under(pos) {
 			under = Some((window.clone().into(), location));
 		} else if let Some(layer) = layers
 			.layer_under(Layer::Bottom, pos)
@@ -560,23 +433,23 @@ impl Compositor {
 	}
 
 	pub fn close_window(&mut self) {
-		let ptr = self.seat().get_pointer().unwrap();
-		if let Some((window, _)) = self.workspaces().current().window_under(ptr.current_location()) {
+		let ptr = self.seat.get_pointer().unwrap();
+		if let Some((window, _)) = self.workspaces.current().window_under(ptr.current_location()) {
 			window.toplevel().send_close()
 		}
 	}
 
 	pub fn switch_to_workspace(&mut self, id: u8) {
-		self.workspaces().activate(id);
+		self.workspaces.activate(id);
 		self.set_input_focus_auto();
 	}
 
 	pub fn move_window_to_workspace(&mut self, id: u8) {
-		let pos = self.seat().get_pointer().unwrap().current_location();
-		let window = self.workspaces().current().window_under(pos).map(|d| d.0.clone());
+		let pos = self.seat.get_pointer().unwrap().current_location();
+		let window = self.workspaces.current().window_under(pos).map(|d| d.0.clone());
 
 		if let Some(window) = window {
-			self.workspaces().move_window_to_workspace(&window, id);
+			self.workspaces.move_window_to_workspace(&window, id);
 		}
 	}
 
@@ -586,7 +459,7 @@ impl Compositor {
 	}
 
 	pub fn quit(&self) {
-		self.0.loop_signal.stop();
+		self.loop_signal.stop();
 	}
 
 	pub fn spawn(&mut self, command: &str) {
@@ -603,7 +476,7 @@ impl Compositor {
 		keysym: Keysym,
 		event: &I::KeyboardKeyEvent,
 	) {
-		let old_modstate = self.mods().state;
+		let old_modstate = self.mods.state;
 
 		let modflag = match keysym {
 			// equivalent to "Control_* + Shift_* + Alt_*" (on my keyboard *smile*)
@@ -645,15 +518,15 @@ impl Compositor {
 					new_modstate.serialized.depressed > new_modstate.serialized.locked - old_modstate.serialized.locked;
 
 				if is_modifier && depressed {
-					self.mods().flags ^= modflag;
+					self.mods.flags ^= modflag;
 				}
 			}
 			KeyState::Released => {
-				self.mods().flags ^= modflag;
+				self.mods.flags ^= modflag;
 			}
 		};
 
-		self.mods().state = new_modstate.clone();
+		self.mods.state = *new_modstate;
 	}
 }
 

@@ -2633,7 +2633,7 @@ pub struct KeyPattern {
 
 impl Compositor {
 	pub fn set_input_focus(&mut self, target: FocusTarget) {
-		let keyboard = self.seat().get_keyboard().unwrap();
+		let keyboard = self.seat.get_keyboard().unwrap();
 		let serial = SERIAL_COUNTER.next_serial();
 		keyboard.set_focus(self, Some(target), serial);
 	}
@@ -2651,8 +2651,8 @@ impl Compositor {
 
 		self.set_input_focus_auto();
 
-		if let Some(ptr) = self.seat().get_pointer() {
-			let location = self.workspaces().current().clamp_coords(ptr.current_location() + delta);
+		if let Some(ptr) = self.seat.get_pointer() {
+			let location = self.workspaces.current().clamp_coords(ptr.current_location() + delta);
 
 			let under = self.surface_under();
 
@@ -2686,17 +2686,17 @@ impl Compositor {
 	) -> anyhow::Result<()> {
 		let serial = SERIAL_COUNTER.next_serial();
 
-		let curr_workspace = self.workspaces().current();
+		let curr_workspace = self.workspaces.current();
 		let output = curr_workspace.outputs().next().unwrap();
 		let output_geo = curr_workspace.output_geometry(output).unwrap();
 		let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
 
-		let location = self.workspaces().current().clamp_coords(pos);
+		let location = self.workspaces.current().clamp_coords(pos);
 
 		self.set_input_focus_auto();
 
 		let under = self.surface_under();
-		if let Some(ptr) = self.seat().get_pointer() {
+		if let Some(ptr) = self.seat.get_pointer() {
 			ptr.motion(
 				self,
 				under,
@@ -2717,7 +2717,7 @@ impl Compositor {
 		let button = event.button_code();
 		let button_state = event.state();
 		self.set_input_focus_auto();
-		if let Some(ptr) = self.seat().get_pointer() {
+		if let Some(ptr) = self.seat.get_pointer() {
 			ptr.button(
 				self,
 				&ButtonEvent {
@@ -2752,7 +2752,7 @@ impl Compositor {
 			frame = frame.stop(Axis::Vertical);
 		}
 
-		if let Some(ptr) = self.seat().get_pointer() {
+		if let Some(ptr) = self.seat.get_pointer() {
 			ptr.axis(self, frame);
 		}
 
