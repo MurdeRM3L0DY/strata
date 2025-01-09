@@ -4,7 +4,6 @@
 use std::{
 	ffi::OsString,
 	os::fd::AsRawFd,
-	process::Command,
 	sync::Arc,
 	time::Instant,
 };
@@ -96,7 +95,9 @@ use smithay::{
 
 use crate::{
 	backends::Backend,
-	bindings,
+	bindings::{
+		self,
+	},
 	config::{
 		StrataConfig,
 		StrataInputConfig,
@@ -122,7 +123,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-	fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
+	pub fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
 	where
 		F: FnOnce((&mut lua::Lua, &lua::StashedExecutor), &FrozenCompositor) -> R,
 	{
@@ -176,13 +177,31 @@ impl Strata {
 
 					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Return, function()
 						print("spawning kitty")
-						strata.spawn('kitty')
+						strata.proc.spawn('kitty')
 					end)
 
 					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Escape, function()
 						print("quitting strata")
 						strata.quit()
 					end)
+
+					-- alternatives???
+					-- local pid, stdout, stderr = strata.proc.spawn({ "inotify", "..." })
+					-- stdout:read(function(...)
+					-- end)
+					-- stderr:read(function(...)
+					-- end)
+
+					print("(kitty) pid=" .. strata.proc.spawn("kitty"))
+
+					strata.proc.spawn({ "pactl", "subscribe" }, {
+						stdout = function(out)
+							print("(pactl) stdout=" .. out)
+						end,
+						stderr = function(err)
+							print("(pactl) stderr=", err)
+						end
+					})
 					"#[..],
 				)?;
 
@@ -205,11 +224,32 @@ impl Strata {
 		})
 	}
 
+	pub fn execute_lua<R, A>(
+		&mut self,
+		f: impl for<'gc> FnOnce(lua::Context<'gc>, &Compositor) -> (lua::Function<'gc>, A),
+	) -> anyhow::Result<R>
+	where
+		R: for<'gc> lua::FromMultiValue<'gc>,
+		A: for<'gc> lua::IntoMultiValue<'gc>,
+	{
+		self.rt
+			.scope(&mut self.comp, |(lua, ex), comp| {
+				comp.with(|comp| {
+					lua.enter(|ctx| {
+						let (f, args) = f(ctx, comp);
+						ctx.fetch(ex).restart(ctx, f, args);
+					});
+				});
+				lua.execute::<R>(ex)
+			})
+			.map_err(|e| anyhow::anyhow!("{:?}", e))
+	}
+
 	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
 		match event {
 			InputEvent::Keyboard {
 				event, ..
-			} => self.keyboard::<I>(event)?,
+			} => self.on_keyboard::<I>(event)?,
 			InputEvent::PointerMotion {
 				event, ..
 			} => self.comp.pointer_motion::<I>(event)?,
@@ -289,7 +329,7 @@ impl Strata {
 		Ok(())
 	}
 
-	pub fn keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) -> anyhow::Result<()> {
+	pub fn on_keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) -> anyhow::Result<()> {
 		let serial = SERIAL_COUNTER.next_serial();
 		let time = Event::time_msec(&event);
 
@@ -326,18 +366,9 @@ impl Strata {
 				}
 			},
 		) {
-			self.rt.scope(&mut self.comp, |(lua, ex), comp| {
-				comp.with(|comp| {
-					let f = &comp.config.input_config.global_keybinds[&k];
-					lua.enter(|ctx| {
-						ctx.fetch(ex).restart(ctx, ctx.fetch(f), ());
-					});
-				});
-				if let Err(e) = lua.execute::<()>(ex) {
-					println!("{:#?}", e);
-				}
-
-				anyhow::Ok(())
+			self.execute_lua::<(), _>(|ctx, comp| {
+				let f = &comp.config.input_config.global_keybinds[&k];
+				(ctx.fetch(f), ())
 			})?;
 		};
 
@@ -551,14 +582,6 @@ impl Compositor {
 
 	pub fn quit(&self) {
 		self.loop_signal.stop();
-	}
-
-	pub fn spawn(&mut self, command: &str) {
-		Command::new("/bin/sh")
-			.arg("-c")
-			.arg(command)
-			.spawn()
-			.expect("Failed to spawn command");
 	}
 
 	pub fn handle_mods<I: InputBackend>(
