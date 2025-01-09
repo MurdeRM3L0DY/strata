@@ -1,6 +1,20 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::{
+	collections::{
+		HashMap,
+		HashSet,
+	},
+	hash,
+};
+
+use indexmap::{
+	IndexMap,
+	IndexSet,
+};
+use rustc_hash::FxHasher;
+
 #[macro_export]
 macro_rules! enum_table {
     (
@@ -97,3 +111,9 @@ macro_rules! enum_table {
         };
     }
 }
+
+pub type FxIndexMap<K, V> = IndexMap<K, V, hash::BuildHasherDefault<FxHasher>>;
+pub type FxIndexSet<T> = IndexSet<T, hash::BuildHasherDefault<FxHasher>>;
+
+pub type FxHashMap<K, V> = HashMap<K, V, hash::BuildHasherDefault<FxHasher>>;
+pub type FxHashSet<T> = HashSet<T, hash::BuildHasherDefault<FxHasher>>;

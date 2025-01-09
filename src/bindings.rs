@@ -1,8 +1,7 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.-or-later
 
-use std::process::Command;
-
+use anyhow::Context as _;
 use piccolo::{
 	self as lua,
 	FromValue as _,
@@ -11,13 +10,14 @@ use piccolo::{
 use crate::state::FrozenCompositor;
 
 mod input;
+mod proc;
 
 trait ContextExt<'gc> {
-	fn comp(self, ud: &lua::UserData<'gc>) -> anyhow::Result<&'gc FrozenCompositor>;
+	fn comp(self, ud: lua::UserData<'gc>) -> anyhow::Result<&'gc FrozenCompositor>;
 }
 
 impl<'gc> ContextExt<'gc> for lua::Context<'gc> {
-	fn comp(self, ud: &lua::UserData<'gc>) -> anyhow::Result<&'gc FrozenCompositor> {
+	fn comp(self, ud: lua::UserData<'gc>) -> anyhow::Result<&'gc FrozenCompositor> {
 		Ok(ud.downcast_static::<FrozenCompositor>()?)
 	}
 }
@@ -28,20 +28,11 @@ pub fn create<'gc>(ctx: lua::Context<'gc>, comp: &FrozenCompositor) -> anyhow::R
 	let index = lua::Table::new(&ctx);
 
 	index.set(ctx, "input", input::module(ctx, comp)?)?;
-	index.set(
-		ctx,
-		"spawn",
-		lua::Callback::from_fn_with(&ctx, comp, |_, ctx, _, mut stack| {
-			let (cmd, _) = stack.consume::<(lua::String, lua::Value)>(ctx)?;
-			let _ = Command::new(cmd.to_str()?).spawn()?;
-
-			Ok(lua::CallbackReturn::Return)
-		}),
-	)?;
+	index.set(ctx, "proc", proc::module(ctx, comp)?)?;
 	index.set(
 		ctx,
 		"quit",
-		lua::Callback::from_fn_with(&ctx, comp, |comp, ctx, _, _| {
+		lua::Callback::from_fn_with(&ctx, comp, |&comp, ctx, _, _| {
 			let comp = ctx.comp(comp)?;
 
 			comp.with(|comp| {
@@ -60,7 +51,5 @@ pub fn create<'gc>(ctx: lua::Context<'gc>, comp: &FrozenCompositor) -> anyhow::R
 }
 
 pub fn get_str_from_value<'gc>(ctx: lua::Context<'gc>, value: lua::Value<'gc>) -> anyhow::Result<&'gc str> {
-	let r = lua::String::from_value(ctx, value)?;
-
-	Ok(r.to_str()?)
+	Ok(value.into_string(ctx).context("Invalid `string`")?.to_str()?)
 }

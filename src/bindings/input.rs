@@ -1,6 +1,7 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use anyhow::Context as _;
 use piccolo::{
 	self as lua,
 	FromValue as _,
@@ -73,7 +74,7 @@ pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::
 	input.set_field(
 		ctx,
 		"keybind",
-		lua::Callback::from_fn_with(&ctx, comp, |comp, ctx, _, mut stack| {
+		lua::Callback::from_fn_with(&ctx, comp, |&comp, ctx, _, mut stack| {
 			let comp = ctx.comp(comp)?;
 			let (modifiers, key, cb) = stack.consume::<(Modifiers, Key, lua::Function)>(ctx)?;
 
@@ -93,50 +94,74 @@ pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::
 	input.set_field(
 		ctx,
 		"setup",
-		lua::Callback::from_fn_with(&ctx, comp, |comp, ctx, _, mut stack| {
+		lua::Callback::from_fn_with(&ctx, comp, |&comp, ctx, _, mut stack| {
 			let comp = ctx.comp(comp)?;
 			let (cfg,) = stack.consume::<(lua::Table,)>(ctx)?;
 
 			comp.with_mut(|comp| {
 				if let lua::Value::Table(repeat_info) = cfg.get_value(ctx, "repeat_info") {
 					let rate = i64::from_value(ctx, repeat_info.get_value(ctx, "rate"))
-						.map_err(|e| anyhow::anyhow!("`repeat_info.rate` is invalid\n{:?}", e))?;
+						.context("`repeat_info.rate` is invalid")?;
 					let delay = i64::from_value(ctx, repeat_info.get_value(ctx, "delay"))
-						.map_err(|e| anyhow::anyhow!("`repeat_info.delay` is invalid\n{:?}", e))?;
+						.context("`repeat_info.delay` is invalid")?;
 
 					comp.seat
 						.get_keyboard()
-						.ok_or_else(|| anyhow::anyhow!("Unable to get keyboard"))?
+						.context("Unable to get keyboard")?
 						.change_repeat_info(rate.abs() as i32, delay.abs() as i32);
 				}
 
-				if let lua::Value::Table(xkbconfig) = cfg.get_value(ctx, "xkbconfig") {
+				if let Some(xkbconfig) = Option::<lua::Table>::from_value(ctx, cfg.get_value(ctx, "xkbconfig"))
+					.context("`xkbconfig` is invalid")?
+				{
 					StrataXkbConfig::update(comp, |cfg| {
 						let Some(cfg) = cfg else { return Ok(()) };
 
-						let layout = get_str_from_value(ctx, xkbconfig.get_value(ctx, "layout"))
-							.map_err(|e| anyhow::anyhow!("`xkbconfig.layout` is invalid\n{:?}", e))?;
-						cfg.layout.replace_range(.., layout);
-
-						let rules = get_str_from_value(ctx, xkbconfig.get_value(ctx, "rules"))
-							.map_err(|e| anyhow::anyhow!("`xkbconfig.rules` is invalid\n{:?}", e))?;
-						cfg.rules.replace_range(.., rules);
-
-						let model = get_str_from_value(ctx, xkbconfig.get_value(ctx, "model"))
-							.map_err(|e| anyhow::anyhow!("`xkbconfig.model` is invalid\n{:?}", e))?;
-						cfg.model.replace_range(.., model);
-
-						let options = get_str_from_value(ctx, xkbconfig.get_value(ctx, "options"))
-							.map_err(|e| anyhow::anyhow!("`xkbconfig.options` is invalid\n{:?}", e))?;
-						if let Some(s) = cfg.options.as_mut() {
-							s.replace_range(.., options);
-						} else {
-							cfg.options = Some(options.to_string());
+						if let Some(layout) = Option::<lua::String>::from_value(ctx, xkbconfig.get_value(ctx, "layout"))
+							.context("`xkbconfig.layout` is invalid")?
+							.map(|s| get_str_from_value(ctx, s.into()))
+							.and_then(|s| s.ok())
+						{
+							cfg.layout.replace_range(.., layout);
 						}
 
-						let variant = get_str_from_value(ctx, xkbconfig.get_value(ctx, "variant"))
-							.map_err(|e| anyhow::anyhow!("`xkbconfig.variant` is invalid\n{:?}", e))?;
-						cfg.variant.replace_range(.., variant);
+						if let Some(rules) = Option::<lua::String>::from_value(ctx, xkbconfig.get_value(ctx, "rules"))
+							.context("`xkbconfig.rules` is invalid")?
+							.map(|s| get_str_from_value(ctx, s.into()))
+							.and_then(|s| s.ok())
+						{
+							cfg.rules.replace_range(.., rules);
+						}
+
+						if let Some(model) = Option::<lua::String>::from_value(ctx, xkbconfig.get_value(ctx, "model"))
+							.context("`xkbconfig.model` is invalid")?
+							.map(|s| get_str_from_value(ctx, s.into()))
+							.and_then(|s| s.ok())
+						{
+							cfg.model.replace_range(.., model);
+						}
+
+						if let Some(options) =
+							Option::<lua::String>::from_value(ctx, xkbconfig.get_value(ctx, "options"))
+								.context("`xkbconfig.options` is invalid")?
+								.map(|s| get_str_from_value(ctx, s.into()))
+								.and_then(|s| s.ok())
+						{
+							if let Some(s) = cfg.options.as_mut() {
+								s.replace_range(.., options);
+							} else {
+								cfg.options = Some(options.to_string());
+							}
+						}
+
+						if let Some(variant) =
+							Option::<lua::String>::from_value(ctx, xkbconfig.get_value(ctx, "variant"))
+								.context("`xkbconfig.variant` is invalid")?
+								.map(|s| get_str_from_value(ctx, s.into()))
+								.and_then(|s| s.ok())
+						{
+							cfg.variant.replace_range(.., variant);
+						}
 
 						Ok(())
 					})?;
@@ -172,5 +197,5 @@ pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::
 		}),
 	);
 
-	Ok(input.into_value(ctx))
+	Ok(input.into())
 }

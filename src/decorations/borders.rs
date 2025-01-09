@@ -1,7 +1,12 @@
 // Copyright 2023 the Strata authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::decorations::BorderShader;
+use std::{
+	borrow::BorrowMut,
+	cell::RefCell,
+	collections::HashMap,
+};
+
 use smithay::{
 	backend::renderer::{
 		element::Element,
@@ -23,11 +28,8 @@ use smithay::{
 		Size,
 	},
 };
-use std::{
-	borrow::BorrowMut,
-	cell::RefCell,
-	collections::HashMap,
-};
+
+use crate::decorations::BorderShader;
 
 const ROUNDED_BORDER_FRAG: &str = include_str!("shaders/rounded_corners.frag");
 const BORDER_FRAG: &str = include_str!("shaders/borders.frag");
@@ -62,12 +64,18 @@ impl BorderShader {
 				],
 			)
 			.unwrap();
-		renderer.egl_context().user_data().insert_if_missing(|| BorderShader { rounded, default });
+		renderer.egl_context().user_data().insert_if_missing(|| {
+			BorderShader {
+				rounded,
+				default,
+			}
+		});
 		renderer
 			.egl_context()
 			.user_data()
 			.insert_if_missing(|| BorderShaderElements(RefCell::new(HashMap::new())));
 	}
+
 	pub fn get(renderer: &GlowRenderer) -> &BorderShader {
 		renderer
 			.egl_context()
@@ -75,11 +83,8 @@ impl BorderShader {
 			.get::<BorderShader>()
 			.expect("Border Shader not initialized")
 	}
-	pub fn element(
-		renderer: &mut GlowRenderer,
-		window: &Window,
-		loc: Point<i32, Logical>,
-	) -> PixelShaderElement {
+
+	pub fn element(renderer: &mut GlowRenderer, window: &Window, loc: Point<i32, Logical>) -> PixelShaderElement {
 		// let thickness: f32 = CONFIG.read().decorations.border.width as f32;
 		let thickness = 2.0;
 		let thickness_loc = (thickness as i32, thickness as i32);
@@ -112,10 +117,7 @@ impl BorderShader {
 					1.0,
 					vec![
 						Uniform::new("startColor", [0.880, 1.0, 1.0]),
-						Uniform::new(
-							"endColor",
-							Some([0.580, 0.921, 0.921]).unwrap_or([0.880, 1.0, 1.0]),
-						),
+						Uniform::new("endColor", Some([0.580, 0.921, 0.921]).unwrap_or([0.880, 1.0, 1.0])),
 						Uniform::new("thickness", thickness),
 						Uniform::new("halfThickness", thickness * 0.5),
 						Uniform::new(
@@ -135,10 +137,7 @@ impl BorderShader {
 					1.0,
 					vec![
 						Uniform::new("startColor", [0.880, 1.0, 1.0]),
-						Uniform::new(
-							"endColor",
-							Some([0.580, 0.921, 0.921]).unwrap_or([0.880, 1.0, 1.0]),
-						),
+						Uniform::new("endColor", Some([0.580, 0.921, 0.921]).unwrap_or([0.880, 1.0, 1.0])),
 						Uniform::new("thickness", thickness),
 						Uniform::new("halfThickness", thickness * 0.5),
 						Uniform::new("gradientDirection", gradient_direction),
@@ -150,6 +149,7 @@ impl BorderShader {
 			elem
 		}
 	}
+
 	pub fn cleanup(renderer: &mut GlowRenderer) {
 		let elements = &mut renderer
 			.egl_context()

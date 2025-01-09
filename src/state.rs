@@ -4,11 +4,11 @@
 use std::{
 	ffi::OsString,
 	os::fd::AsRawFd,
-	process::Command,
 	sync::Arc,
 	time::Instant,
 };
 
+use anyhow::Context as _;
 use piccolo::{
 	self as lua,
 };
@@ -96,7 +96,9 @@ use smithay::{
 
 use crate::{
 	backends::Backend,
-	bindings,
+	bindings::{
+		self,
+	},
 	config::{
 		StrataConfig,
 		StrataInputConfig,
@@ -122,7 +124,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-	fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
+	pub fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
 	where
 		F: FnOnce((&mut lua::Lua, &lua::StashedExecutor), &FrozenCompositor) -> R,
 	{
@@ -152,39 +154,7 @@ impl Strata {
 			lua.try_enter(|ctx| {
 				ctx.globals().set(ctx, "strata", bindings::create(ctx, comp)?)?;
 
-				let main = lua::Closure::load(
-					ctx,
-					None,
-					&br#"
-					local ks = strata.input.Keys
-					local ms = strata.input.Modifiers
-
-                    strata.input.setup {
-						repeat_info = {
-						    rate = 30,
-							delay = 150,
-						},
-
-						xkbconfig = {
-							layout = "it",
-							rules = "",
-							model = "",
-							options = "caps:swapescape",
-							variant = "",
-						},
-                    }
-
-					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Return, function()
-						print("spawning kitty")
-						strata.spawn('kitty')
-					end)
-
-					strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Escape, function()
-						print("quitting strata")
-						strata.quit()
-					end)
-					"#[..],
-				)?;
+				let main = lua::Closure::load(ctx, None, include_str!("../init.lua").as_bytes())?;
 
 				ctx.fetch(ex).restart(ctx, main.into(), ());
 
@@ -192,7 +162,7 @@ impl Strata {
 			})?;
 
 			if let Err(e) = lua.execute::<()>(ex) {
-				println!("{:#?}", e);
+				println!("{:?}", e);
 			}
 
 			anyhow::Ok(())
@@ -205,11 +175,32 @@ impl Strata {
 		})
 	}
 
+	pub fn execute_lua<R>(
+		&mut self,
+		f: impl for<'gc> FnOnce(lua::Context<'gc>, &Compositor) -> lua::Function<'gc>,
+		args: impl for<'gc> lua::IntoMultiValue<'gc>,
+	) -> anyhow::Result<R>
+	where
+		R: for<'gc> lua::FromMultiValue<'gc>,
+	{
+		self.rt
+			.scope(&mut self.comp, |(lua, ex), comp| {
+				comp.with(|comp| {
+					lua.enter(|ctx| {
+						let f = f(ctx, comp);
+						ctx.fetch(ex).restart(ctx, f, args);
+					});
+				});
+				lua.execute::<R>(ex)
+			})
+			.context("error executing lua closure")
+	}
+
 	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
 		match event {
 			InputEvent::Keyboard {
 				event, ..
-			} => self.keyboard::<I>(event)?,
+			} => self.on_keyboard::<I>(event)?,
 			InputEvent::PointerMotion {
 				event, ..
 			} => self.comp.pointer_motion::<I>(event)?,
@@ -289,7 +280,7 @@ impl Strata {
 		Ok(())
 	}
 
-	pub fn keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) -> anyhow::Result<()> {
+	pub fn on_keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) -> anyhow::Result<()> {
 		let serial = SERIAL_COUNTER.next_serial();
 		let time = Event::time_msec(&event);
 
@@ -307,8 +298,8 @@ impl Strata {
 			|comp, mods, keysym_h| {
 				comp.handle_mods::<I>(mods, keysym_h.modified_sym(), &event);
 
-				// println!("{:#?}", comp.mods);
-				// println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
+				println!("{:#?}", comp.mods);
+				println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
 				match event.state() {
 					KeyState::Pressed => {
 						let k = KeyPattern {
@@ -326,19 +317,15 @@ impl Strata {
 				}
 			},
 		) {
-			self.rt.scope(&mut self.comp, |(lua, ex), comp| {
-				comp.with(|comp| {
+			if let Err(e) = self.execute_lua::<()>(
+				|ctx, comp| {
 					let f = &comp.config.input_config.global_keybinds[&k];
-					lua.enter(|ctx| {
-						ctx.fetch(ex).restart(ctx, ctx.fetch(f), ());
-					});
-				});
-				if let Err(e) = lua.execute::<()>(ex) {
-					println!("{:#?}", e);
-				}
-
-				anyhow::Ok(())
-			})?;
+					ctx.fetch(f)
+				},
+				(),
+			) {
+				println!("{:?}", e);
+			};
 		};
 
 		Ok(())
@@ -480,16 +467,18 @@ impl Compositor {
 			.seat
 			.get_keyboard()
 			.ok_or_else(|| anyhow::anyhow!("Unable to get keyboard handle"))?;
-		keyboard.set_xkb_config(
-			self,
-			XkbConfig {
-				layout: &cfg.layout,
-				rules: &cfg.rules,
-				model: &cfg.model,
-				options: cfg.options.clone(),
-				variant: &cfg.variant,
-			},
-		)?;
+		keyboard
+			.set_xkb_config(
+				self,
+				XkbConfig {
+					layout: &cfg.layout,
+					rules: &cfg.rules,
+					model: &cfg.model,
+					options: cfg.options.clone(),
+					variant: &cfg.variant,
+				},
+			)
+			.context(format!("Invalid layout: {:?}", &cfg.layout))?;
 		self.mods.state = keyboard.modifier_state();
 
 		Ok(())
@@ -551,14 +540,6 @@ impl Compositor {
 
 	pub fn quit(&self) {
 		self.loop_signal.stop();
-	}
-
-	pub fn spawn(&mut self, command: &str) {
-		Command::new("/bin/sh")
-			.arg("-c")
-			.arg(command)
-			.spawn()
-			.expect("Failed to spawn command");
 	}
 
 	pub fn handle_mods<I: InputBackend>(

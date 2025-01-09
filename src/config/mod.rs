@@ -1,25 +1,16 @@
-use std::hash::BuildHasherDefault;
-
-use indexmap::{
-	IndexMap,
-	IndexSet,
-};
 use piccolo::{
 	self as lua,
 };
-use rustc_hash::FxHasher;
 
 use crate::{
 	handlers::input::KeyPattern,
 	state::Compositor,
+	util::FxIndexMap,
 };
 
 mod from_lua;
 mod parse;
 mod structs;
-
-pub type FxIndexMap<K, V> = IndexMap<K, V, BuildHasherDefault<FxHasher>>;
-pub type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
 // pub use parse::parse_config;
 // pub use structs::*;
