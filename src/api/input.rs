@@ -5,22 +5,20 @@ use anyhow::Context as _;
 use piccolo::{
 	self as lua,
 	FromValue as _,
-	IntoValue as _,
 };
 use smithay::input::keyboard::xkb::keysym_from_name;
 
-use super::get_str_from_value;
 use crate::{
-	bindings::ContextExt,
+	api::ContextExt,
 	config::StrataXkbConfig,
 	handlers::input::{
 		Key,
 		KeyPattern,
-		Modifiers,
-	},
+		Modifier,
+	}, util::get_str_from_value,
 };
 
-fn keys<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Table<'gc>> {
+fn key<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Table<'gc>> {
 	let meta = lua::Table::new(&ctx);
 
 	meta.set(
@@ -42,7 +40,7 @@ fn keys<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result
 	Ok(keys)
 }
 
-fn modifiers<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Table<'gc>> {
+fn modifier<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Table<'gc>> {
 	let meta = lua::Table::new(&ctx);
 
 	meta.set(
@@ -51,7 +49,7 @@ fn modifiers<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::R
 		lua::Callback::from_fn(&ctx, |ctx, _, mut stack| {
 			let (_, k) = stack.consume::<(lua::Table, lua::String)>(ctx)?;
 			let k = k.to_str()?;
-			let bits = Modifiers::from_name(k).ok_or_else(|| anyhow::anyhow!("invalid Mod key: {}", k))?;
+			let bits = Modifier::from_name(k).with_context(|| format!("Invalid Modifier: {}", k))?;
 
 			stack.push_front(lua::Value::Integer(bits.bits() as i64));
 
@@ -65,21 +63,21 @@ fn modifiers<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::R
 	Ok(modifiers)
 }
 
-pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Value<'gc>> {
+pub fn api<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::Result<lua::Value<'gc>> {
 	let input = lua::Table::new(&ctx);
 
-	input.set_field(ctx, "Keys", keys(ctx, comp)?);
-	input.set_field(ctx, "Modifiers", modifiers(ctx, comp)?);
+	input.set_field(ctx, "Key", key(ctx, comp)?);
+	input.set_field(ctx, "Modifier", modifier(ctx, comp)?);
 
 	input.set_field(
 		ctx,
 		"keybind",
 		lua::Callback::from_fn_with(&ctx, comp, |&comp, ctx, _, mut stack| {
 			let comp = ctx.comp(comp)?;
-			let (modifiers, key, cb) = stack.consume::<(Modifiers, Key, lua::Function)>(ctx)?;
+			let (modifier, key, cb) = stack.consume::<(Modifier, Key, lua::Function)>(ctx)?;
 
 			let keypat = KeyPattern {
-				modifiers,
+				modifier,
 				key,
 			};
 
@@ -99,16 +97,18 @@ pub fn module<'gc>(ctx: lua::Context<'gc>, comp: lua::UserData<'gc>) -> anyhow::
 			let (cfg,) = stack.consume::<(lua::Table,)>(ctx)?;
 
 			comp.with_mut(|comp| {
-				if let lua::Value::Table(repeat_info) = cfg.get_value(ctx, "repeat_info") {
-					let rate = i64::from_value(ctx, repeat_info.get_value(ctx, "rate"))
-						.context("`repeat_info.rate` is invalid")?;
-					let delay = i64::from_value(ctx, repeat_info.get_value(ctx, "delay"))
-						.context("`repeat_info.delay` is invalid")?;
+				if let Some(repeat_info) = Option::<lua::Table>::from_value(ctx, cfg.get_value(ctx, "repeat_info"))
+					.context("`repeat_info` is invalid")?
+				{
+					let rate = i32::from_value(ctx, repeat_info.get_value(ctx, "rate"))
+						.unwrap_or(comp.config.input_config.repeat_info.rate);
+					let delay = i32::from_value(ctx, repeat_info.get_value(ctx, "delay"))
+						.unwrap_or(comp.config.input_config.repeat_info.delay);
 
 					comp.seat
 						.get_keyboard()
 						.context("Unable to get keyboard")?
-						.change_repeat_info(rate.abs() as i32, delay.abs() as i32);
+						.change_repeat_info(rate.abs(), delay.abs());
 				}
 
 				if let Some(xkbconfig) = Option::<lua::Table>::from_value(ctx, cfg.get_value(ctx, "xkbconfig"))

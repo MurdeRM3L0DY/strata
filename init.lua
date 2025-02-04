@@ -1,5 +1,5 @@
-local ks = strata.input.Keys
-local ms = strata.input.Modifiers
+local k = strata.input.Key
+local m = strata.input.Modifier
 
 strata.input.setup {
 	repeat_info = {
@@ -16,32 +16,19 @@ strata.input.setup {
 	},
 }
 
-strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Return, function()
+strata.input.keybind(m.Control_L + m.Alt_L, k.Return, function()
 	print("spawning kitty")
 	strata.proc.spawn("kitty")
 end)
 
-strata.input.keybind(ms.Control_L + ms.Alt_L, ks.Escape, function()
+strata.input.keybind(m.Control_L + m.Alt_L, k.Escape, function()
 	print("quitting strata")
 	strata.quit()
 end)
 
--- alternatives???
--- local pid, stdout, stderr = strata.proc.spawn({ "inotify", "..." })
--- stdout:read(function(...)
--- end)
--- stderr:read(function(...)
--- end)
-
--- print("(kitty) pid=" .. strata.proc.spawn({ "echo", "hello world" }, {
--- 	stdout = function(out)
--- 		print("echo -> " .. out)
--- 	end
--- }))
-
--- print("(echo) pid=" .. strata.proc.spawn { "echo", "hello world" })
-
-strata.proc.spawn({ "pactl", "subscribe" }, {
-	stdout = function(out) print("(pactl) stdout=" .. out) end,
-	stderr = function(err) print("(pactl) stderr=", err) end,
-})
+local p = strata.proc.spawn { "pactl", "subscribe" }
+p:on_line_stdout(function(line)
+	print("(lua) stdout=" .. line)
+end)
+p:on_line_stderr(function(line) print("(lua) stderr=" .. line) end)
+p:on_exit(function(status, signal) print("(lua) exited with", status, signal) end)

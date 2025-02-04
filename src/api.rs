@@ -4,12 +4,12 @@
 use anyhow::Context as _;
 use piccolo::{
 	self as lua,
-	FromValue as _,
 };
 
 use crate::state::FrozenCompositor;
 
 mod input;
+mod meta;
 mod proc;
 
 trait ContextExt<'gc> {
@@ -18,24 +18,25 @@ trait ContextExt<'gc> {
 
 impl<'gc> ContextExt<'gc> for lua::Context<'gc> {
 	fn comp(self, ud: lua::UserData<'gc>) -> anyhow::Result<&'gc FrozenCompositor> {
-		Ok(ud.downcast_static::<FrozenCompositor>()?)
+		ud.downcast_static::<FrozenCompositor>()
+			.context("expected `FrozenCompositor (userdata)`, got `Unknown (userdata)`")
 	}
 }
 
-pub fn create<'gc>(ctx: lua::Context<'gc>, comp: &FrozenCompositor) -> anyhow::Result<lua::UserData<'gc>> {
-	let comp = lua::UserData::new_static(&ctx, comp.clone());
+pub fn create_global<'gc>(ctx: lua::Context<'gc>, fcomp: &FrozenCompositor) -> anyhow::Result<lua::UserData<'gc>> {
+	let comp = lua::UserData::new_static(&ctx, fcomp.clone());
 
 	let index = lua::Table::new(&ctx);
 
-	index.set(ctx, "input", input::module(ctx, comp)?)?;
-	index.set(ctx, "proc", proc::module(ctx, comp)?)?;
+	index.set(ctx, "input", input::api(ctx, comp)?)?;
+	index.set(ctx, "proc", proc::api(ctx, comp)?)?;
 	index.set(
 		ctx,
 		"quit",
 		lua::Callback::from_fn_with(&ctx, comp, |&comp, ctx, _, _| {
-			let comp = ctx.comp(comp)?;
+			let fcomp = ctx.comp(comp)?;
 
-			comp.with(|comp| {
+			fcomp.with(|comp| {
 				comp.quit();
 			});
 
@@ -44,12 +45,8 @@ pub fn create<'gc>(ctx: lua::Context<'gc>, comp: &FrozenCompositor) -> anyhow::R
 	)?;
 
 	let meta = lua::Table::new(&ctx);
-	meta.set_field(ctx, lua::MetaMethod::Index.name(), index);
+	meta.set(ctx, lua::MetaMethod::Index, index)?;
 	comp.set_metatable(&ctx, Some(meta));
 
 	Ok(comp)
-}
-
-pub fn get_str_from_value<'gc>(ctx: lua::Context<'gc>, value: lua::Value<'gc>) -> anyhow::Result<&'gc str> {
-	Ok(value.into_string(ctx).context("Invalid `string`")?.to_str()?)
 }

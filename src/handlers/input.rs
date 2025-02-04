@@ -38,7 +38,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Mods {
-	pub flags: Modifiers,
+	pub flags: Modifier,
 	pub state: ModifiersState,
 }
 
@@ -92,7 +92,7 @@ pub struct Mods {
 // const KEY_ISO_Last_Group_Lock = 0xfe0f;
 bitflags! {
 	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-	pub struct Modifiers: u16 {
+	pub struct Modifier: u16 {
 		const Shift_L = 1;
 		const Shift_R = 1 << 1;
 		const Control_L = 1 << 2;
@@ -108,7 +108,7 @@ bitflags! {
 	}
 }
 
-impl<'gc> lua::FromValue<'gc> for Modifiers {
+impl<'gc> lua::FromValue<'gc> for Modifier {
 	fn from_value(_: lua::Context<'gc>, value: lua::Value<'gc>) -> Result<Self, lua::TypeError> {
 		match value {
 			// lua::Value::Table(mods) => {
@@ -133,9 +133,9 @@ impl<'gc> lua::FromValue<'gc> for Modifiers {
 			//
 			// 	Ok(r)
 			// }
-			lua::Value::Nil => Ok(Modifiers::empty()),
+			lua::Value::Nil => Ok(Modifier::empty()),
 			lua::Value::Integer(bits) => {
-				Ok(Modifiers::from_bits(bits as u16).ok_or(lua::TypeError {
+				Ok(Modifier::from_bits(bits as u16).ok_or(lua::TypeError {
 					expected: "Modifier (integer)",
 					found: "Invalid (integer)",
 				})?)
@@ -175,7 +175,7 @@ impl<'gc> lua::FromValue<'gc> for Key {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyPattern {
-	pub modifiers: Modifiers,
+	pub modifier: Modifier,
 	pub key: Key,
 }
 

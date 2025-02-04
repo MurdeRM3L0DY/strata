@@ -95,18 +95,17 @@ use smithay::{
 };
 
 use crate::{
-	backends::Backend,
-	bindings::{
+	api::{
 		self,
 	},
+	backends::Backend,
 	config::{
 		StrataConfig,
-		StrataInputConfig,
 		StrataXkbConfig,
 	},
 	handlers::input::{
 		KeyPattern,
-		Modifiers,
+		Modifier,
 		Mods,
 	},
 	workspaces::{
@@ -115,50 +114,44 @@ use crate::{
 	},
 };
 
+mod process_state;
+
+pub use process_state::init_sigchld_handler;
+
 pub type FrozenCompositor = Frozen<Freeze![&'freeze mut Compositor]>;
-
-pub struct Runtime {
-	lua: lua::Lua,
-	comp: FrozenCompositor,
-	ex: lua::StashedExecutor,
-}
-
-impl Runtime {
-	pub fn scope<F, R>(&mut self, comp: &mut Compositor, f: F) -> R
-	where
-		F: FnOnce((&mut lua::Lua, &lua::StashedExecutor), &FrozenCompositor) -> R,
-	{
-		FreezeGuard::new(&self.comp, comp).scope(|| f((&mut self.lua, &self.ex), &self.comp))
-	}
-}
 
 pub struct Strata {
 	pub display: Display<Compositor>,
-	pub rt: Runtime,
 	pub comp: Compositor,
+
+	lua: lua::Lua,
+	ex: lua::StashedExecutor,
+	fcomp: FrozenCompositor,
 }
 
 impl Strata {
-	pub fn new(mut comp: Compositor, display: Display<Compositor>) -> anyhow::Result<Self> {
+	pub fn new(comp: Compositor, display: Display<Compositor>) -> anyhow::Result<Self> {
 		let mut lua = lua::Lua::full();
 		let ex = lua.enter(|ctx| ctx.stash(lua::Executor::new(ctx)));
-		let mut rt = Runtime {
+		let mut strata = Strata {
+			display,
+			comp,
 			lua,
-			comp: FrozenCompositor::new(),
 			ex,
+			fcomp: FrozenCompositor::new(),
 		};
 
-		std::env::set_var("WAYLAND_DISPLAY", &comp.socket_name);
+		std::env::set_var("WAYLAND_DISPLAY", &strata.comp.socket_name);
 
-		rt.scope(&mut comp, |(lua, ex), comp| {
-			lua.try_enter(|ctx| {
-				ctx.globals().set(ctx, "strata", bindings::create(ctx, comp)?)?;
+		strata.scope(|lua, ex, fcomp| {
+			lua.enter(|ctx| {
+				ctx.globals().set(ctx, "strata", api::create_global(ctx, fcomp)?)?;
 
 				let main = lua::Closure::load(ctx, None, include_str!("../init.lua").as_bytes())?;
 
 				ctx.fetch(ex).restart(ctx, main.into(), ());
 
-				Ok(())
+				anyhow::Ok(())
 			})?;
 
 			if let Err(e) = lua.execute::<()>(ex) {
@@ -168,32 +161,30 @@ impl Strata {
 			anyhow::Ok(())
 		})?;
 
-		Ok(Strata {
-			rt,
-			comp,
-			display,
-		})
+		Ok(strata)
 	}
 
-	pub fn execute_lua<R>(
-		&mut self,
-		f: impl for<'gc> FnOnce(lua::Context<'gc>, &Compositor) -> lua::Function<'gc>,
-		args: impl for<'gc> lua::IntoMultiValue<'gc>,
-	) -> anyhow::Result<R>
+	pub fn scope<F, R>(&mut self, f: F) -> R
 	where
-		R: for<'gc> lua::FromMultiValue<'gc>,
+		F: FnOnce(&mut lua::Lua, &lua::StashedExecutor, &FrozenCompositor) -> R,
 	{
-		self.rt
-			.scope(&mut self.comp, |(lua, ex), comp| {
-				comp.with(|comp| {
-					lua.enter(|ctx| {
-						let f = f(ctx, comp);
-						ctx.fetch(ex).restart(ctx, f, args);
-					});
-				});
-				lua.execute::<R>(ex)
-			})
-			.context("error executing lua closure")
+		FreezeGuard::new(&self.fcomp, &mut self.comp).scope(|| f(&mut self.lua, &self.ex, &self.fcomp))
+	}
+
+	pub fn enter<R>(&mut self, f: impl FnOnce(lua::Context, &lua::StashedExecutor, &mut Compositor) -> R) -> R {
+		self.lua.enter(|ctx| f(ctx, &self.ex, &mut self.comp))
+	}
+
+	pub fn execute<R: for<'gc> lua::FromMultiValue<'gc>>(&mut self) -> anyhow::Result<R> {
+		self.scope(|lua, ex, _| lua.execute::<R>(ex).context("lua closure error"))
+	}
+
+	pub fn execute_closure<R: for<'gc> lua::FromMultiValue<'gc>>(
+		&mut self,
+		f: impl for<'gc> FnOnce(lua::Context<'gc>, &lua::StashedExecutor, &mut Compositor),
+	) -> anyhow::Result<R> {
+		self.enter(f);
+		self.execute::<R>()
 	}
 
 	pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) -> anyhow::Result<()> {
@@ -284,11 +275,8 @@ impl Strata {
 		let serial = SERIAL_COUNTER.next_serial();
 		let time = Event::time_msec(&event);
 
-		let keyboard = self
-			.comp
-			.seat
-			.get_keyboard()
-			.ok_or_else(|| anyhow::anyhow!("no keyboard attached to seat"))?;
+		let keyboard = self.comp.seat.get_keyboard().context("no keyboard attached to seat")?;
+
 		if let Some(k) = keyboard.input(
 			&mut self.comp,
 			event.key_code(),
@@ -298,12 +286,12 @@ impl Strata {
 			|comp, mods, keysym_h| {
 				comp.handle_mods::<I>(mods, keysym_h.modified_sym(), &event);
 
-				println!("{:#?}", comp.mods);
-				println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
+				// println!("{:#?}", comp.mods);
+				// println!("{:#?}({:#?})", event.state(), keysym_h.modified_sym());
 				match event.state() {
 					KeyState::Pressed => {
 						let k = KeyPattern {
-							modifiers: comp.mods.flags,
+							modifier: comp.mods.flags,
 							key: keysym_h.modified_sym().into(),
 						};
 
@@ -317,13 +305,10 @@ impl Strata {
 				}
 			},
 		) {
-			if let Err(e) = self.execute_lua::<()>(
-				|ctx, comp| {
-					let f = &comp.config.input_config.global_keybinds[&k];
-					ctx.fetch(f)
-				},
-				(),
-			) {
+			if let Err(e) = self.execute_closure::<()>(|ctx, ex, comp| {
+				let f = &comp.config.input_config.global_keybinds[&k];
+				ctx.fetch(ex).restart(ctx, ctx.fetch(f), ());
+			}) {
 				println!("{:?}", e);
 			};
 		};
@@ -356,7 +341,9 @@ pub struct Compositor {
 	pub socket_name: OsString,
 	pub workspaces: Workspaces,
 	pub mods: Mods,
+
 	pub config: StrataConfig,
+	pub process_state: process_state::ProcessState,
 }
 
 impl Compositor {
@@ -393,12 +380,12 @@ impl Compositor {
 
 		let config = StrataConfig::default();
 
-		let StrataInputConfig {
-			repeat_info,
-			xkbconfig,
-			..
-		} = &config.input_config;
-		let xkbconfig = xkbconfig.as_ref().expect("StrataXkbConfig should have a default set");
+		let repeat_info = &config.input_config.repeat_info;
+		let xkbconfig = &config
+			.input_config
+			.xkbconfig
+			.as_ref()
+			.expect("StrataXkbConfig should have a default set");
 
 		let mut seat_state = SeatState::new();
 		let mut seat = seat_state.new_wl_seat(&display_handle, "strata-seat-0");
@@ -430,6 +417,8 @@ impl Compositor {
 		let primary_selection_state = PrimarySelectionState::new::<Compositor>(&display_handle);
 		let layer_shell_state = WlrLayerShellState::new::<Compositor>(&display_handle);
 
+		let process_state = process_state::ProcessState::new(&loop_handle)?;
+
 		let comp = Compositor {
 			backend: Backend::Unset,
 			display_handle,
@@ -453,10 +442,12 @@ impl Compositor {
 			socket_name,
 			workspaces,
 			mods: Mods {
-				flags: Modifiers::empty(),
+				flags: Modifier::empty(),
 				state: mods_state,
 			},
+
 			config,
+			process_state,
 		};
 
 		Ok(comp)
@@ -552,28 +543,28 @@ impl Compositor {
 
 		let modflag = match keysym {
 			// equivalent to "Control_* + Shift_* + Alt_*" (on my keyboard *smile*)
-			Keysym::Meta_L => Modifiers::Alt_L,
-			Keysym::Meta_R => Modifiers::Alt_R,
+			Keysym::Meta_L => Modifier::Alt_L,
+			Keysym::Meta_R => Modifier::Alt_R,
 
-			Keysym::Shift_L => Modifiers::Shift_L,
-			Keysym::Shift_R => Modifiers::Shift_R,
+			Keysym::Shift_L => Modifier::Shift_L,
+			Keysym::Shift_R => Modifier::Shift_R,
 
-			Keysym::Control_L => Modifiers::Control_L,
-			Keysym::Control_R => Modifiers::Control_R,
+			Keysym::Control_L => Modifier::Control_L,
+			Keysym::Control_R => Modifier::Control_R,
 
-			Keysym::Alt_L => Modifiers::Alt_L,
-			Keysym::Alt_R => Modifiers::Alt_R,
+			Keysym::Alt_L => Modifier::Alt_L,
+			Keysym::Alt_R => Modifier::Alt_R,
 
-			Keysym::Super_L => Modifiers::Super_L,
-			Keysym::Super_R => Modifiers::Super_R,
+			Keysym::Super_L => Modifier::Super_L,
+			Keysym::Super_R => Modifier::Super_R,
 
-			Keysym::ISO_Level3_Shift => Modifiers::ISO_Level3_Shift,
-			Keysym::ISO_Level5_Shift => Modifiers::ISO_Level5_Shift,
+			Keysym::ISO_Level3_Shift => Modifier::ISO_Level3_Shift,
+			Keysym::ISO_Level5_Shift => Modifier::ISO_Level5_Shift,
 
-			Keysym::Hyper_L => Modifiers::Hyper_L,
-			Keysym::Hyper_R => Modifiers::Hyper_R,
+			Keysym::Hyper_L => Modifier::Hyper_L,
+			Keysym::Hyper_R => Modifier::Hyper_R,
 
-			_ => Modifiers::empty(),
+			_ => Modifier::empty(),
 		};
 
 		match event.state() {

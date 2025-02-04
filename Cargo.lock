@@ -334,6 +334,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
 name = "cgmath"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -659,36 +665,12 @@ dependencies = [
 [[package]]
 name = "gc-arena"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cd70cf88a32937834aae9614ff2569b5d9467fa0c42c5d7762fd94a8de88266"
-dependencies = [
- "allocator-api2",
- "gc-arena-derive 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "hashbrown 0.14.5",
- "sptr",
-]
-
-[[package]]
-name = "gc-arena"
-version = "0.5.3"
 source = "git+https://github.com/kyren/gc-arena?rev=5a7534b883b703f23cfb8c3cfdf033460aa77ea9#5a7534b883b703f23cfb8c3cfdf033460aa77ea9"
 dependencies = [
  "allocator-api2",
- "gc-arena-derive 0.5.3 (git+https://github.com/kyren/gc-arena?rev=5a7534b883b703f23cfb8c3cfdf033460aa77ea9)",
+ "gc-arena-derive",
  "hashbrown 0.14.5",
  "sptr",
-]
-
-[[package]]
-name = "gc-arena-derive"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c612a69f5557a11046b77a7408d2836fe77077f842171cd211c5ef504bd3cddd"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
 ]
 
 [[package]]
@@ -1173,6 +1155,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases 0.2.1",
+ "libc",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1307,7 +1301,7 @@ dependencies = [
  "ahash",
  "allocator-api2",
  "anyhow",
- "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena?rev=5a7534b883b703f23cfb8c3cfdf033460aa77ea9)",
+ "gc-arena",
  "hashbrown 0.14.5",
  "rand",
  "thiserror",
@@ -1318,7 +1312,7 @@ name = "piccolo-util"
 version = "0.3.3"
 source = "git+https://github.com/kyren/piccolo.git#9b4100fb08fdcafd7dcf8916be9600d50946d6b2"
 dependencies = [
- "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena?rev=5a7534b883b703f23cfb8c3cfdf033460aa77ea9)",
+ "gc-arena",
  "piccolo",
  "serde",
  "thiserror",
@@ -1533,9 +1527,9 @@ checksum = "c7fb8039b3032c191086b10f11f319a6e99e1e82889c5cc6046f515c9db1d497"
 
 [[package]]
 name = "rustix"
-version = "0.38.42"
+version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93dc38ecbab2eb790ff964bb77fa94faf256fd3e73285fd7ba0903b76bedb85"
+checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags 2.6.0",
  "errno",
@@ -1776,9 +1770,10 @@ dependencies = [
  "clap",
  "colored",
  "crossbeam-channel",
- "gc-arena 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gc-arena",
  "indexmap",
  "log",
+ "nix",
  "once_cell",
  "parking_lot",
  "piccolo",
@@ -2643,7 +2638,7 @@ dependencies = [
  "bitflags 2.6.0",
  "bytemuck",
  "calloop",
- "cfg_aliases",
+ "cfg_aliases 0.1.1",
  "core-foundation",
  "core-graphics",
  "cursor-icon",

@@ -9,7 +9,6 @@ use log::info;
 use smithay::reexports::{
 	calloop::EventLoop,
 	wayland_server::Display,
-	winit::keyboard::ModifiersState,
 };
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -21,8 +20,8 @@ use crate::{
 	},
 };
 
+pub mod api;
 pub mod backends;
-pub mod bindings;
 pub mod config;
 pub mod decorations;
 pub mod handlers;
@@ -39,8 +38,7 @@ pub struct Args {
 	pub backend: String,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 	let xdg = xdg::BaseDirectories::with_prefix("strata")?;
 	let log_dir = xdg.get_state_home();
@@ -63,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
 	}
 
 	info!("Initializing Strata WM");
+	state::init_sigchld_handler()?;
 
 	let mut event_loop = EventLoop::try_new()?;
 	let mut display = Display::new()?;

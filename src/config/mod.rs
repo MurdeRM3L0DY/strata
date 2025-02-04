@@ -1,6 +1,7 @@
 use piccolo::{
 	self as lua,
 };
+use smithay::input::keyboard::XkbConfig;
 
 use crate::{
 	handlers::input::KeyPattern,
