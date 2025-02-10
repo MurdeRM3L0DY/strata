@@ -15,6 +15,7 @@ use gc_arena::{
 use nix::unistd::Pid;
 use piccolo::{
 	self as lua,
+	IntoValue,
 };
 
 use crate::{
@@ -74,17 +75,18 @@ impl Child {
 
 			let src = ReadLineCb::new(src, ctx.stash(cb))?;
 
-			let fcomp = ctx.comp(comp)?;
+			let fcomp = ctx.fcomp(comp)?;
 			fcomp.with(|comp| {
 				let reg = comp
 					.loop_handle
 					.insert_source(src, move |_, m, strata| {
-						if let Err(e) = strata.execute_closure::<()>(|ctx, ex, _| {
-							let s = lua::String::from_slice(&ctx, &m.buf[..m.buf.len() - 1]);
-							ctx.fetch(ex).restart(ctx, ctx.fetch(&m.cb), (s,));
+						if let Err(e) = strata.execute_closure::<(), 1>(|ctx, _| {
+							let s = lua::String::from_slice(&ctx, &m.buf[..m.buf.len() - 1]).into_value(ctx);
+
+							(ctx.fetch(&m.cb), [s])
 						}) {
 							println!("{:?}", e);
-						}
+						};
 
 						Ok(())
 					})
@@ -135,7 +137,7 @@ impl Child {
 				let pid = this.borrow().id();
 				println!("pid={}", pid);
 
-				let fcomp = ctx.comp(comp)?;
+				let fcomp = ctx.fcomp(comp)?;
 				fcomp.with_mut(|comp| {
 					comp.process_state
 						.on_exit_cbs
